@@ -68,6 +68,29 @@ def masked_l2(a, b, mask):
     mse_loss_val = (non_zero_elements > 0) * (loss / (non_zero_elements + 0.00000001))
     return mse_loss_val
 
+def masked_l2_rz(a, b, mask):
+    # 첫 4개 요소에 대한 MSE 손실 계산
+    mse_loss_bbox = F.mse_loss(a[:, :, :4], b[:, :, :4], reduction='none') * mask[:, :, :4].float()
+    mse_loss_bbox = sum_flat(mse_loss_bbox) / (sum_flat(mask[:, :, :4]) + 1e-8)
+    
+    # a의 5번째 요소와 b의 6번째 요소에 대한 MSE 계산
+    mse_loss_z = F.mse_loss(a[:, :, 5].unsqueeze(-1), b[:, :, 5].unsqueeze(-1), reduction='none') * mask[:, :, 5].unsqueeze(-1).float()
+    mse_loss_z = sum_flat(mse_loss_z) / (sum_flat(mask[:, :, 5].unsqueeze(-1)) + 1e-8)
+    
+    # a의 4번째 요소를 cos과 sin으로 변환하여 b의 4,5번째 요소와 비교
+    a_cos = torch.cos(a[:, :, 4] * 2 * torch.pi)
+    a_sin = torch.sin(a[:, :, 4] * 2 * torch.pi)
+    b_cos = torch.cos(b[:, :, 4] * 2 * torch.pi)
+    b_sin = torch.sin(b[:, :, 4] * 2 * torch.pi)
+    mse_loss_cos = F.mse_loss(a_cos.unsqueeze(-1), b_cos.unsqueeze(-1), reduction='none') * mask[:, :, 4].unsqueeze(-1).float()
+    mse_loss_sin = F.mse_loss(a_sin.unsqueeze(-1), b_sin.unsqueeze(-1), reduction='none') * mask[:, :, 4].unsqueeze(-1).float()
+    mse_loss_r = (sum_flat(mse_loss_cos) + sum_flat(mse_loss_sin)) / (sum_flat(mask[:, :, 4].unsqueeze(-1)) + 1e-8)
+    
+    
+    # 전체 손실 합산
+    total_loss = mse_loss_bbox + mse_loss_z + mse_loss_r
+    return total_loss
+
 def masked_l2_r(a, b, mask):
     # 첫 4개 요소에 대한 MSE 손실 계산
     mse_loss_bbox = F.mse_loss(a[:, :, :4], b[:, :, :4], reduction='none') * mask[:, :, :4].float()

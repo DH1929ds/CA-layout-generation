@@ -24,7 +24,7 @@ from data_loaders.canva import CanvaLayout
 import safetensors.torch as safetensors
 from safetensors.torch import load_model, save_model
 
-from models.CAL import CAL
+from models.CAL import CAL_4, CAL_6
 from accelerate import Accelerator
 
 from evaluation.iou import transform, print_results, get_iou, get_mean_iou
@@ -33,16 +33,14 @@ FLAGS = flags.FLAGS
 config_flags.DEFINE_config_file("config", "Training configuration.",
                                 lock_config=False)
 flags.DEFINE_string("workdir", default='test2', help="Work unit directory.")
-flags.DEFINE_string("epoch", default='1499', help="Epoch to load from checkpoint.")
+flags.DEFINE_string("epoch", default='999', help="Epoch to load from checkpoint.")
 flags.DEFINE_string("cond_type", default='all', help="Condition type to sample from.")
 flags.DEFINE_bool("save", default=False, help="Save samples.")
 flags.mark_flags_as_required(["config"])
 
-def sample_from_model(batch, model, device, diffusion, geometry_scale):
-    #shape = batch['geometry'].shape
+def sample_from_model(batch, model, device, diffusion, geometry_scale, diffusion_mode):
     shape = batch['geometry'].shape
     model.eval()
-    
     # generate initial noise
     noisy_batch = {
         'geometry': torch.randn(*shape, dtype=torch.float32, device=device)*geometry_scale.view(1, 1, 6).to(device)* batch['padding_mask'],
@@ -54,22 +52,20 @@ def sample_from_model(batch, model, device, diffusion, geometry_scale):
         t = torch.tensor([i] * shape[0], device=device)
         with torch.no_grad():
             # denoise for step t.
-            geometry_pred = model(batch, noisy_batch, timesteps=t)
-
-            # sample
-            geometry_pred = diffusion.inference_step(geometry_pred,
+            if diffusion_mode == "sample":
+                x0_pred = model(batch, noisy_batch, timesteps=t)
+                geometry_pred = diffusion.inference_step(x0_pred,
                                                          timestep=torch.tensor([i], device=device),
                                                          sample=noisy_batch['geometry'])
+            elif diffusion_mode == "epsilon":
+                epsilon_pred = model(batch, noisy_batch, timesteps=t)
+                geometry_pred = diffusion.inference_step(epsilon_pred,
+                                                         timestep=torch.tensor([i], device=device),
+                                                         sample=noisy_batch['geometry'])                
             
             noisy_batch['geometry'] = geometry_pred.prev_sample * batch['padding_mask']
             
-            # print('########################################################')
-            # print("batch[geometry]: ", batch['geometry'])
-            # print("noisy_batch[geometry]: ",noisy_batch['geometry'])
-            # print("padding_mask after: ", noisy_batch['geometry'] * batch['padding_mask'])
-            # print('########################################################')
     return geometry_pred.pred_original_sample
-
 
 def main(*args, **kwargs):
     config = init_job()
@@ -95,7 +91,10 @@ def main(*args, **kwargs):
     #             activation='gelu', cond_emb_size=config.cond_emb_size,
     #             cat_emb_size=config.cls_emb_size)
     
-    model = CAL()
+    if config.rz_ox == True:
+        model = CAL_6()
+    else:
+        model = CAL_4()
     
 
     
@@ -119,7 +118,7 @@ def main(*args, **kwargs):
                                               device=config.device,
                                               num_train_timesteps=config.num_cont_timesteps,
                                               beta_schedule=config.beta_schedule,
-                                              prediction_type='sample',
+                                              prediction_type='epsilon',
                                               clip_sample=False, )
 
     val_loader = DataLoader(val_data, batch_size=config.optimizer.batch_size,
@@ -143,7 +142,9 @@ def main(*args, **kwargs):
     for batch, ids in tqdm(val_loader):
         batch = {k: v.to(config.device) for k, v in batch.items()}
         with torch.no_grad():
-            pred_geometry = sample_from_model(batch, model, config.device, noise_scheduler, geometry_scale)*batch["padding_mask"]
+            pred_geometry = sample_from_model(batch, model, config.device, noise_scheduler, geometry_scale, config.diffusion_mode)*batch["padding_mask"]
+            
+           
         
         real_geometry = batch["geometry"]
         real_box, pred_box = transform(real_geometry, pred_geometry, config.scaling_size,batch["padding_mask"],config.mean_0)
@@ -173,7 +174,7 @@ def main(*args, **kwargs):
         # 캔버스 크기 예시
         canvas_size = (1920, 1080)
         base_path = "visualize_picture"
-        save_path = 'output_result'
+        save_path = 'output_result2'
         
         # 이미지 합치기 실행
         # for id, geometry  in zip(ids, batch["geometry"]):

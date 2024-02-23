@@ -64,28 +64,7 @@ def main(*args, **kwargs):
     if config.rz_ox == True:
         model = CAL_6().to(accelerator.device)
     else:
-        model = CAL_4().to(accelerator.device)
-
-    # noise_scheduler = JointDiffusionScheduler(alpha=0.0,
-    #                                           seq_max_length=config.max_num_comp,
-    #                                           device=accelerator.device,
-    #                                           discrete_features_names=[('cat', config.categories_num), ],
-    #                                           num_discrete_steps=[config.num_discrete_steps, ],
-    #                                           num_train_timesteps=config.num_cont_timesteps,
-    #                                           beta_schedule=config.beta_schedule,
-    #                                           prediction_type='sample',
-    #                                           clip_sample=False, )
-
-    # noise_scheduler = GeometryDiffusionScheduler(alpha=0.0,
-    #                                           seq_max_length=config.max_num_comp,
-    #                                           device=accelerator.device,
-    #                                           discrete_features_names=[('cat', config.categories_num), ],
-    #                                           num_discrete_steps=[config.num_discrete_steps, ],
-    #                                           num_train_timesteps=config.num_cont_timesteps,
-    #                                           beta_schedule=config.beta_schedule,
-    #                                           prediction_type='sample',
-    #                                           clip_sample=False, )
-    
+        model = CAL_4().to(accelerator.device)    
     
     noise_scheduler = GeometryDiffusionScheduler(seq_max_length=config.max_num_comp,
                                               device=accelerator.device,
@@ -97,9 +76,9 @@ def main(*args, **kwargs):
     TrainLoopCAL(accelerator=accelerator, model=model, diffusion=noise_scheduler,
                  train_data=train_data, val_data=val_data, opt_conf=config.optimizer,
                  log_interval=config.log_interval, save_interval=config.save_interval,
-                 device=accelerator.device, resume_from_checkpoint=config.resume_from_checkpoint, 
-                 scaling_size = config.scaling_size, z_scaling_size=config.z_scaling_size, 
-                 mean_0 = config.mean_0).train()
+                 device=accelerator.device, resume_from_checkpoint=config.resume_from_checkpoint,
+                 diffusion_mode = config.diffusion_mode, scaling_size = config.scaling_size,
+                 z_scaling_size=config.z_scaling_size, mean_0 = config.mean_0).train()
 
 
 def init_job():

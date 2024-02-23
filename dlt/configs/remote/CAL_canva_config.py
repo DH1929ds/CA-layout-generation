@@ -30,7 +30,7 @@ def get_config():
     config.categories_num = 7
     
     # model mode
-    config.rz_ox = True
+    config.rz_ox = False
     
     # model specific
     config.latent_dim = 512
@@ -44,7 +44,7 @@ def get_config():
     config.num_cont_timesteps = 1000
     #config.num_discrete_steps = 10
     config.beta_schedule = "squaredcos_cap_v2"
-    config.diffusion_mode = "sample" #  'epsilon'
+    config.diffusion_mode = "epsilon"
 
     # Training info
     config.log_interval = 1
