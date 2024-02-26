@@ -62,9 +62,9 @@ def main(*args, **kwargs):
     #             cat_emb_size=config.cls_emb_size).to(accelerator.device)
     
     if config.rz_ox == True:
-        model = CAL_6().to(accelerator.device)
+        model = CAL_6(is_cond = config.is_cond).to(accelerator.device)
     else:
-        model = CAL_4().to(accelerator.device)    
+        model = CAL_4(is_cond = config.is_cond).to(accelerator.device)    
     
     noise_scheduler = GeometryDiffusionScheduler(seq_max_length=config.max_num_comp,
                                               device=accelerator.device,
@@ -78,7 +78,7 @@ def main(*args, **kwargs):
                  log_interval=config.log_interval, save_interval=config.save_interval,
                  device=accelerator.device, resume_from_checkpoint=config.resume_from_checkpoint,
                  diffusion_mode = config.diffusion_mode, scaling_size = config.scaling_size,
-                 z_scaling_size=config.z_scaling_size, mean_0 = config.mean_0).train()
+                 z_scaling_size=config.z_scaling_size, mean_0 = config.mean_0, loss_weight=config.loss_weight).train()
 
 
 def init_job():

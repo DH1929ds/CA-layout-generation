@@ -61,6 +61,36 @@ def sample_from_model(batch, model, device, diffusion, geometry_scale, diffusion
             
     return geometry_pred.pred_original_sample
 
+def refinement_from_model(batch, model, device, diffusion, geometry_scale, diffusion_mode):
+    shape = batch['geometry'].shape
+    model.eval()
+    # generate initial noise
+    noise = torch.randn(*shape, dtype=torch.float32, device=device)*geometry_scale.view(1, 1, 6).to(device)* batch['padding_mask']
+    t = torch.tensor([199] * shape[0], device=device)
+    noisy_batch = {
+        'geometry': diffusion.add_noise_Geometry(batch['geometry'], t, noise),
+        "image_features": batch['image_features']
+    }
+    
+    # sample x_0 = q(x_0|x_t)
+    for i in range(200)[::-1]:
+        t = torch.tensor([i] * shape[0], device=device)
+        with torch.no_grad():
+            # denoise for step t.
+            if diffusion_mode == "sample":
+                x0_pred = model(batch, noisy_batch, timesteps=t)
+                geometry_pred = diffusion.inference_step(x0_pred,
+                                                         timestep=torch.tensor([i], device=device),
+                                                         sample=noisy_batch['geometry'])
+            elif diffusion_mode == "epsilon":
+                epsilon_pred = model(batch, noisy_batch, timesteps=t)
+                geometry_pred = diffusion.inference_step(epsilon_pred,
+                                                         timestep=torch.tensor([i], device=device),
+                                                         sample=noisy_batch['geometry'])                
+            
+            noisy_batch['geometry'] = geometry_pred.prev_sample * batch['padding_mask']
+            
+    return geometry_pred.pred_original_sample
 
 class TrainLoopCAL:
     def __init__(self, accelerator: Accelerator, model, diffusion: GeometryDiffusionScheduler, train_data,
@@ -72,7 +102,8 @@ class TrainLoopCAL:
                  diffusion_mode = "sample", 
                  scaling_size = 5,
                  z_scaling_size=0.01,
-                 mean_0 = True):
+                 mean_0 = True,
+                 loss_weight = [1,0.1,0.1]):
         
         self.train_data = train_data
         self.val_data = val_data
@@ -86,6 +117,7 @@ class TrainLoopCAL:
         self.scaling_size = scaling_size
         self.z_scaling_size = z_scaling_size
         self.mean_0 = mean_0
+        self.loss_weight = loss_weight
         
         optimizer = torch.optim.AdamW(model.parameters(), lr=opt_conf.lr, betas=opt_conf.betas,
                                       weight_decay=opt_conf.weight_decay, eps=opt_conf.epsilon)
@@ -350,7 +382,11 @@ class TrainLoopCAL:
         progress_bar = tqdm(total=self.num_update_steps_per_epoch, disable=not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
         train_losses = []
+        train_losses_bbox =[]
+        train_losses_r =[]     
+        train_losses_z =[]        
         train_mean_ious = []
+        train_ious = []
         for step, (batch, ids) in enumerate(self.train_dataloader):
             self.epoch_step = 0
 
@@ -380,11 +416,14 @@ class TrainLoopCAL:
             with self.accelerator.accumulate(self.model):
                 
                 epsilon_predict = self.model(batch, noisy_batch, t)
-                train_main_loss = masked_l2_rz(noise, epsilon_predict, batch['padding_mask']) #masked_12를 사용하여 xywh만 loss 계산 가능, masked_l2_r는 r,z, r의 normalize loss를 포함
-                train_main_loss = train_main_loss.mean()
-                train_loss = train_main_loss
+                bbox_loss, r_loss, z_loss = masked_l2_rz(noise, epsilon_predict, batch['padding_mask']) #masked_12를 사용하여 xywh만 loss 계산 가능, masked_l2_r는 r,z, r의 normalize loss를 포함
+                train_loss = bbox_loss*self.loss_weight[0] + r_loss*self.loss_weight[1] + z_loss*self.loss_weight[2]
+                train_loss = train_loss.mean()
 
-                train_losses.append(train_main_loss.item())
+                train_losses.append(train_loss.item())
+                train_losses_bbox.append(bbox_loss.mean()*self.loss_weight[0])
+                train_losses_r.append(r_loss.mean()*self.loss_weight[1])
+                train_losses_z.append(z_loss.mean()*self.loss_weight[2])
 
                 self.accelerator.backward(train_loss)
                 
@@ -392,6 +431,7 @@ class TrainLoopCAL:
                 pred_geometry = self.diffusion.add_noise_Geometry(batch['geometry'], t, epsilon_predict)*batch['padding_mask'] 
                 true_box, pred_box = transform(true_geometry, pred_geometry, self.scaling_size, batch['padding_mask'], self.mean_0)
                 batch_mean_iou = get_mean_iou(true_box, pred_box)
+                train_ious.append(get_iou(true_box, pred_box))
                 
                 # print(f"batch_mean_iou", batch_mean_iou)
                 train_mean_ious.append(batch_mean_iou)
@@ -416,9 +456,15 @@ class TrainLoopCAL:
         # self.model.eval()
 
         val_losses = []
+        val_losses_bbox =[]
+        val_losses_r =[]     
+        val_losses_z =[]        
         val_mean_ious = []
         val_mean_ious_1000=[]
         train_ious_1000 = []
+        train_ious_refine = []
+        val_refine_ious = []
+        val_ious =[]
 
         with torch.no_grad():
             if epoch % 30 == 0:
@@ -429,6 +475,13 @@ class TrainLoopCAL:
                 train_true_box, train_pred_box = transform(true_geometry, train_pred_geometry_1000, self.scaling_size,batch['padding_mask'], self.mean_0)
                 train_mean_iou = get_mean_iou(train_true_box, train_pred_box)      
                 train_ious_1000.append(train_mean_iou)
+                
+                train_pred_geometry_refine = refinement_from_model(batch, self.model, device, self.diffusion, geometry_scale, self.diffusion_mode)
+                train_pred_geometry_refine = train_pred_geometry_refine*batch['padding_mask']
+                
+                train_true_box, train_pred_box_refine = transform(true_geometry, train_pred_geometry_refine, self.scaling_size,batch['padding_mask'], self.mean_0)
+                train_mean_iou_refine = get_mean_iou(train_true_box, train_pred_box_refine)      
+                train_ious_refine.append(train_mean_iou_refine)
                 
             for val_step, (val_batch, val_ids) in enumerate(self.val_dataloader):
                 self.sample2dev(val_batch)
@@ -441,9 +494,13 @@ class TrainLoopCAL:
                                 
                 val_pred_epsilon = self.model(val_batch, val_noisy_batch, val_t)
                 
-                val_loss = masked_l2_rz(val_noise, val_pred_epsilon, val_batch['padding_mask'])
+                val_bbox_loss, val_r_loss, val_z_loss = masked_l2_rz(val_noise, val_pred_epsilon, val_batch['padding_mask'])
+                val_loss = val_bbox_loss*self.loss_weight[0] + val_r_loss*self.loss_weight[1] + val_z_loss*self.loss_weight[2]
                 val_loss = val_loss.mean()
                 val_losses.append(val_loss.item())
+                val_losses_bbox.append(val_bbox_loss.mean()*self.loss_weight[0])
+                val_losses_r.append(val_r_loss.mean()*self.loss_weight[1])
+                val_losses_z.append(val_z_loss.mean()*self.loss_weight[2])
                 
                 # true_geometry = noisy_geometry*batch['padding_mask']
                 # pred_geometry = self.diffusion.add_noise_Geometry(batch['geometry'], t, epsilon_predict)*batch['padding_mask'] 
@@ -456,7 +513,8 @@ class TrainLoopCAL:
                 val_true_box, val_pred_box = transform(true_geometry, val_pred_geometry, self.scaling_size,val_batch['padding_mask'], self.mean_0)
                 
                 val_mean_iou = get_mean_iou(val_true_box, val_pred_box)
-                      
+
+                val_ious.append(get_iou(val_true_box, val_pred_box))
                 val_mean_ious.append(val_mean_iou)
                              
                 if epoch % 30 == 0:
@@ -468,15 +526,27 @@ class TrainLoopCAL:
                     val_true_box, val_pred_box = transform(true_geometry, val_pred_geometry_1000, self.scaling_size,val_batch['padding_mask'], self.mean_0)
                     val_mean_iou_1000 = get_mean_iou(val_true_box, val_pred_box)      
                     val_mean_ious_1000.append(val_mean_iou_1000)
+                    
+                    val_pred_geometry_refine = refinement_from_model(val_batch, self.model, device, self.diffusion, geometry_scale, self.diffusion_mode)
+
+                    val_pred_geometry_refine=val_pred_geometry_refine*val_batch['padding_mask']
+                    val_true_box, val_pred_box_refine = transform(true_geometry, val_pred_geometry_refine, self.scaling_size,val_batch['padding_mask'], self.mean_0)
+                    val_refine_iou = get_mean_iou(val_true_box, val_pred_box_refine)
+                    val_refine_ious.append(val_refine_iou)
         
         
         
-        
-        
-        ## wandb 로그 찍기
+        ## train wandb
         avg_train_loss = sum(train_losses)/len(train_losses)
+        avg_bbox_loss = sum(train_losses_bbox)/len(train_losses_bbox)
+        avg_r_loss = sum(train_losses_r)/len(train_losses_r)
+        avg_z_loss = sum(train_losses_z)/len(train_losses_z)
         avg_train_mean_iou = sum(train_mean_ious) / len(train_mean_ious)
+        # validation wandb
         avg_val_loss = sum(val_losses) / len(val_losses) 
+        avg_val_bbox_loss = sum(val_losses_bbox)/len(val_losses_bbox)
+        avg_val_r_loss = sum(val_losses_r)/len(val_losses_r)
+        avg_val_z_loss = sum(val_losses_z)/len(val_losses_z)        
         avg_val_mean_iou = sum(val_mean_ious) / len(val_mean_ious)
         
         wandb.log({
@@ -484,13 +554,25 @@ class TrainLoopCAL:
             "train_iou": avg_train_mean_iou,
             "val_loss": avg_val_loss, 
             "val_iou": avg_val_mean_iou,
+            "train_bbox": avg_bbox_loss,
+            "train_rotation":avg_r_loss,
+            "train_z":avg_val_z_loss,
+            "val_bbox": avg_val_bbox_loss,
+            "val_rotation":avg_val_r_loss,
+            "val_z":avg_z_loss,
+            
             "lr": self.lr_scheduler.get_last_lr()[0]
         }, step=epoch)
         
         if epoch % 30 == 0:
             avg_val_mean_iou_1000 = sum(val_mean_ious_1000) / len(val_mean_ious_1000)
             avg_train_iou_1000 = sum(train_ious_1000) / len(train_ious_1000)
-            wandb.log({"iou_val_1000": avg_val_mean_iou_1000, "iou_train_1000":avg_train_iou_1000}, step=epoch)
+            avg_train_iou_refine = sum(train_ious_refine) / len(train_ious_refine)
+            
+            
+            avg_val__iou_refine = sum(val_refine_ious) / len(val_refine_ious)
+            wandb.log({"iou_val_1000": avg_val_mean_iou_1000, "iou_train_1000":avg_train_iou_1000, 
+                       "iou_val_refine:":avg_val__iou_refine, "iou_train_refine:":avg_train_iou_refine}, step=epoch)
         
         LOG.info(f"Epoch {epoch}, Avg Validation Loss: {avg_val_loss}, Avg Mean IoU: {val_mean_iou}")        
         

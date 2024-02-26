@@ -8,6 +8,7 @@ from PIL import Image
 import os
 import wandb
 from natsort import natsorted
+import matplotlib.pyplot as plt
 
 from data_loaders.magazine import MagazineLayout
 from logger_set import LOG
@@ -27,7 +28,7 @@ from safetensors.torch import load_model, save_model
 from models.CAL import CAL_4, CAL_6
 from accelerate import Accelerator
 
-from evaluation.iou import transform, print_results, get_iou, get_mean_iou
+from evaluation.iou import transform, print_results, get_iou, get_mean_iou, get_iou_slide
 
 FLAGS = flags.FLAGS
 config_flags.DEFINE_config_file("config", "Training configuration.",
@@ -136,6 +137,7 @@ def main(*args, **kwargs):
     real_data = []
     pred_data = []
     iou_data  = []
+    ious = []
     
     geometry_scale = torch.tensor([config.scaling_size, config.scaling_size, config.scaling_size, config.scaling_size, 1, config.z_scaling_size]) # scale에 따라 noise 부여
     
@@ -147,39 +149,40 @@ def main(*args, **kwargs):
            
         
         real_geometry = batch["geometry"]
-        real_box, pred_box = transform(real_geometry, pred_geometry, config.scaling_size,batch["padding_mask"],config.mean_0)
+        # real_box, pred_box = transform(real_geometry, pred_geometry, config.scaling_size,batch["padding_mask"],config.mean_0)
         
-        slide_mean_iou = get_mean_iou(real_box, pred_box)
+        # slide_mean_iou = get_mean_iou(real_box, pred_box)
 
-        wandb.log({"mean_iou": slide_mean_iou})
-        # visualize(ids, batch)
+        # wandb.log({"mean_iou": slide_mean_iou})
+        # # visualize(ids, batch)
         
-        # 각 하위 리스트를 하나의 리스트로 합치기
-        valid_ids = [item for sublist in ids for item in sublist]
-        valid_ids = valid_ids[0] if len(valid_ids) == 1 else valid_ids
+        # # 각 하위 리스트를 하나의 리스트로 합치기
+        # valid_ids = [item for sublist in ids for item in sublist]
+        # valid_ids = valid_ids[0] if len(valid_ids) == 1 else valid_ids
         
-        # print("ids: ", valid_ids)
-        # print("ids 길이: ", len(valid_ids))
-        # print("###############################################################")
+        # # print("ids: ", valid_ids)
+        # # print("ids 길이: ", len(valid_ids))
+        # # print("###############################################################")
         
-        # 각 하위 리스트를 하나의 리스트로 합치기
-        valid_ids = [item for sublist in ids for item in sublist]
-        valid_ids = valid_ids[0] if len(valid_ids) == 1 else valid_ids
+        # # 각 하위 리스트를 하나의 리스트로 합치기
+        # valid_ids = [item for sublist in ids for item in sublist]
+        # valid_ids = valid_ids[0] if len(valid_ids) == 1 else valid_ids
         
-        id_data.append(valid_ids)
-        real_data.append(real_geometry)
-        pred_data.append(pred_geometry)
-        iou_data.append(get_iou(real_box, pred_box))
+        # id_data.append(valid_ids)
+        # real_data.append(real_geometry)
+        # pred_data.append(pred_geometry)
+        # iou_data.append(get_iou(real_box, pred_box))
         
         # 캔버스 크기 예시
         canvas_size = (1920, 1080)
         base_path = "visualize_picture"
         save_path = 'output_result2'
-        
+        pred_geometry[:,:,4] = batch['geometry'][:,:,4]
         # 이미지 합치기 실행
         # for id, geometry  in zip(ids, batch["geometry"]):
-        for id, geometry  in zip(ids, pred_geometry):
-            collage = create_collage(batch['geometry'].squeeze(), id, geometry, canvas_size, base_path, config.scaling_size, config.mean_0)
+        for id, geometry, true_geometry  in zip(ids, pred_geometry, real_geometry):
+            ious.append(get_iou_slide(geometry, true_geometry))
+            collage = create_collage(true_geometry, id, geometry, canvas_size, base_path, config.scaling_size, config.mean_0)
             # collage.show()
             # 역 슬래시를 언더스코어로 변경
             ppt_name = id[0].split('/')[0]
@@ -233,7 +236,20 @@ def main(*args, **kwargs):
 
     with open(config.dataset_path / f'inference_canva.pkl', 'wb') as f:
         pickle.dump(all_results, f)
-        
+
+    # 히스토그램을 생성합니다.
+    plt.hist(ious, bins=100, alpha=0.75, color='blue')
+
+    plt.title('IoU Histogram')
+    plt.xlabel('IoU')
+    plt.ylabel('Frequency')
+
+    # 결과를 저장합니다. 여기서 'iou_histogram.png'는 원하는 파일 이름으로 변경할 수 있습니다.
+    plt.savefig('iou_histogram.png')
+    plt.close()  # 현재 그림을 닫아 다음 그림에 영향을 주지 않도록 합니다.
+
+    print("Histogram saved as 'iou_histogram.png'")
+
     wandb.finish()
 
 

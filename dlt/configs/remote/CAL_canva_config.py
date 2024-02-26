@@ -23,14 +23,16 @@ def get_config():
     # Training info
     config.seed = 42
     config.scaling_size = 1
-    config.z_scaling_size = 0.01
+    config.z_scaling_size = 1
     config.mean_0 = False # True면 -1부터 1로 normalization
+    config.is_cond = True
     
     # data specific
     config.categories_num = 7
     
     # model mode
-    config.rz_ox = False
+    config.rz_ox = True
+    config.loss_weight = [1,0,0.1]
     
     # model specific
     config.latent_dim = 512

@@ -54,12 +54,19 @@ def create_collage(batch, ids, geometries, canvas_size, base_path, scaling_size,
         z = batch[i][5] * len(ids)
        
 
-        if w < 1:
+        if w < 1 :
+            print("width:",w)
             w = 1
-            print("############### width가 1 보다 작음 ##################")
-        if h < 1:
+        if h < 1 :
+            print("height:",h)
             h = 1
-            print("############### height가 1 보다 작음 ##################")
+        if w>2500:
+            print("width:",w)
+            w = 2500
+        if h>1500:
+            print("height:",h)
+            h = 1500
+                
         
         img = img.resize((int(w), int(h))).rotate(r, expand=True)
 

@@ -66,20 +66,32 @@ class CanvaLayout(Dataset):
                 slide_ids = []  # 슬라이드별 id 저장을 위한 리스트
                 slide_type = []
                 num_elements = len(slide['contents'])  # Number of elements in the current slide
+                
+                # 여기서 요소 수가 max_num_element개를 초과하는 경우 해당 슬라이드를 무시합니다.
+                if num_elements > self.max_num_element:
+                    continue  # 이 슬라이드를 건너뛰고 다음 슬라이드로 넘어갑니다.
+                
+                # 임시 리스트에 요소들을 튜플로 저장
+                elements = []
                 for content in slide['contents']:
-        
                     geometry = self.normalize_geometry(slide, content, num_elements)
-                    slide_geometry.append(geometry)
-                    
-                    # Fetching image features from clip_data using ppt_name and image_file_name
                     image_file_name = content.get('image_file_name', '')
                     ppt_name = presentation['ppt_name']
                     image_features = clip_data.get(ppt_name, {}).get(image_file_name, [])
-                    slide_image_features.append(image_features)
-                    
-                    content_id = f"{ppt_name}/{image_file_name}" 
-                    slide_ids.append(content_id)
+                    content_id = f"{ppt_name}/{image_file_name}"
                     content_type = content.get('type', '')
+                    
+                    # 각 요소를 튜플로 묶어서 추가
+                    elements.append((geometry, image_features, content_id, content_type))
+                
+                # elements 리스트를 무작위로 섞음
+                random.shuffle(elements)
+                
+                # 섞인 요소들을 다시 각각의 리스트에 추가
+                for geometry, image_features, content_id, content_type in elements:
+                    slide_geometry.append(geometry)
+                    slide_image_features.append(image_features)
+                    slide_ids.append(content_id)
                     slide_type.append(content_type)
                     
                 processed_data["geometry"].append(slide_geometry)
@@ -87,6 +99,7 @@ class CanvaLayout(Dataset):
                 processed_data["ids"].append(slide_ids)  # 슬라이드별 id 정보 추가
                 processed_data["type"].append(slide_type)
         return processed_data
+
 
     def get_data(self):
         return self.data
@@ -96,7 +109,7 @@ class CanvaLayout(Dataset):
         return np.ones(6)  # Placeholder for the masked geometry
 
     def pad_instance(self, geometry):
-        padded_geometry = np.pad(geometry, pad_width=((0,self. max_num_element - np.array(geometry).shape[0]), (0, 0)), constant_values=0.)
+        padded_geometry = np.pad(geometry, pad_width=((0,self.max_num_element - np.array(geometry).shape[0]), (0, 0)), constant_values=0.)
         return padded_geometry
     
     def pad_instance_type(self, cat):
@@ -120,12 +133,12 @@ class CanvaLayout(Dataset):
         ids = self.data['ids'][idx]  # id 정보 로드
         
         cat[cat=='freeform']=1
+        cat[cat=='group']=1
         cat[cat=='picture']=2
+        cat[cat=='table']=2
+        cat[cat=='media']=2
         cat[cat=='auto_shape']=3
         cat[cat=='text_box']=4
-        cat[cat=='group']=5
-        cat[cat=='table']=6
-        cat[cat=='media']=6
         cat[cat=='0'] = 0
        
         cat = cat.reshape((-1,))

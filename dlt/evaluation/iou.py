@@ -232,3 +232,50 @@ def polygon_area(points):
     area = torch.abs(area) / 2.0
     return area
 
+def calculate_iou(box1, box2):
+    # box1, box2: [x, y, w, h]
+    x1, y1, w1, h1, r, z = box1
+    x2, y2, w2, h2, r, z = box2
+
+    # Calculate coordinates for each bounding box
+    x_min = max(x1 - w1/2, x2 - w2/2)
+    y_min = max(y1 - h1/2, y2 - h2/2)
+    x_max = min(x1 + w1/2, x2 + w2/2)
+    y_max = min(y1 + h1/2, y2 + h2/2)
+
+    # Calculating the area of the intersection
+    intersection_area = max(0, x_max - x_min) * max(0, y_max - y_min)
+
+    # Calculate the area of each bounding box
+    area_box1 = w1 * h1
+    area_box2 = w2 * h2
+
+    # Calculating the area of the union area
+    union_area = area_box1 + area_box2 - intersection_area
+
+    # Calculating IoU
+    ious = intersection_area / union_area
+
+    return ious
+
+def get_iou_slide(real_box, predicted_box):
+    # 0인 열 제거 전에 real_box와 predicted_box에서 모든 값이 0인 열을 찾아 제거합니다.
+    non_zero_indices = torch.logical_and(real_box.sum(dim=1) != 0, predicted_box.sum(dim=1) != 0)
+    filtered_real_box = real_box[non_zero_indices]
+    filtered_predicted_box = predicted_box[non_zero_indices]
+    
+    # IoU 계산
+    num_boxes = filtered_real_box.shape[0]
+    iou = torch.zeros(num_boxes)
+    
+    for i in range(num_boxes):
+        iou[i] = calculate_iou(filtered_real_box[i], filtered_predicted_box[i])
+    
+    # 0이 아닌 IoU 값이 하나라도 있는 경우 평균 IoU 값을 계산합니다.
+    # 모든 IoU 값이 0인 경우, avg_iou 값을 0으로 설정합니다.
+    if len(iou) > 0:
+        avg_iou = torch.mean(iou)
+    else:
+        avg_iou = torch.tensor(0.0)
+    
+    return avg_iou
