@@ -413,7 +413,7 @@ class TrainLoopCAL:
             noisy_batch = {"geometry": noisy_geometry*batch['padding_mask'],
                            "image_features": batch['image_features']}
             
-            uncond_batch = batch.copy()
+            uncond_batch = copy.deepcopy(batch)
             if self.is_cond:
                 mask_num = int(0.5 * uncond_batch['geometry'].size(0))
                 mask_index = torch.randperm(uncond_batch['geometry'].size(0))[:mask_num]
