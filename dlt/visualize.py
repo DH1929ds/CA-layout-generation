@@ -56,15 +56,19 @@ def create_collage(batch, ids, geometries, canvas_size, base_path, scaling_size,
 
         if w < 1 :
             print("width:",w)
+            print(file_name)
             w = 1
         if h < 1 :
             print("height:",h)
+            print(file_name)
             h = 1
         if w>2500:
             print("width:",w)
+            print(file_name)
             w = 2500
         if h>1500:
             print("height:",h)
+            print(file_name)
             h = 1500
                 
         

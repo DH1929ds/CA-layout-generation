@@ -103,7 +103,8 @@ class TrainLoopCAL:
                  scaling_size = 5,
                  z_scaling_size=0.01,
                  mean_0 = True,
-                 loss_weight = [1,0.1,0.1]):
+                 loss_weight = [1,0.1,0.1],
+                 is_cond = True):
         
         self.train_data = train_data
         self.val_data = val_data
@@ -118,6 +119,7 @@ class TrainLoopCAL:
         self.z_scaling_size = z_scaling_size
         self.mean_0 = mean_0
         self.loss_weight = loss_weight
+        self.is_cond = is_cond
         
         optimizer = torch.optim.AdamW(model.parameters(), lr=opt_conf.lr, betas=opt_conf.betas,
                                       weight_decay=opt_conf.weight_decay, eps=opt_conf.epsilon)
@@ -410,12 +412,20 @@ class TrainLoopCAL:
             # rewrite box with noised version, original box is still in batch['box_cond']
             noisy_batch = {"geometry": noisy_geometry*batch['padding_mask'],
                            "image_features": batch['image_features']}
-
+            
+            uncond_batch = batch.copy()
+            if self.is_cond:
+                mask_num = int(0.5 * uncond_batch['geometry'].size(0))
+                mask_index = torch.randperm(uncond_batch['geometry'].size(0))[:mask_num]
+                
+                uncond_batch['image_features'][mask_index] = 0
+                uncond_batch['geometry'][mask_index] = 0
+                uncond_batch["cat"][mask_index] = 0
 
             # Run the model on the noisy layouts
             with self.accelerator.accumulate(self.model):
                 
-                epsilon_predict = self.model(batch, noisy_batch, t)
+                epsilon_predict = self.model(uncond_batch, noisy_batch, t)
                 bbox_loss, r_loss, z_loss = masked_l2_rz(noise, epsilon_predict, batch['padding_mask']) #masked_12를 사용하여 xywh만 loss 계산 가능, masked_l2_r는 r,z, r의 normalize loss를 포함
                 train_loss = bbox_loss*self.loss_weight[0] + r_loss*self.loss_weight[1] + z_loss*self.loss_weight[2]
                 train_loss = train_loss.mean()
