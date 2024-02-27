@@ -34,16 +34,20 @@ from models.clip_encoder import CLIPModule
 
 def sample_from_model(batch, model, device, diffusion, geometry_scale, diffusion_mode):
     shape = batch['geometry'].shape
+    shape2 = batch['image_features'].shape
     model.eval()
     # generate initial noise
     noisy_batch = {
         'geometry': torch.randn(*shape, dtype=torch.float32, device=device)*geometry_scale.view(1, 1, 6).to(device)* batch['padding_mask'],
-        "image_features": batch['image_features']
+        "image_features": torch.randn(*shape2, dtype=torch.float32, device=device).to(device) #이미지의 가우시안 노이즈 
     }
 
     # sample x_0 = q(x_0|x_t)
     for i in range(diffusion.num_cont_steps)[::-1]:
         t = torch.tensor([i] * shape[0], device=device)
+        img_feature_noise = torch.randn(batch['image_features'].shape).to(device)
+        noisy_image_features = diffusion.add_noise_Geometry(batch['image_features'], t, img_feature_noise) * batch['padding_mask_img']
+        noisy_batch["image_features"] = noisy_image_features
         with torch.no_grad():
             # denoise for step t.
             if diffusion_mode == "sample":
@@ -53,28 +57,33 @@ def sample_from_model(batch, model, device, diffusion, geometry_scale, diffusion
                                                          sample=noisy_batch['geometry'])
             elif diffusion_mode == "epsilon":
                 epsilon_pred = model(batch, noisy_batch, timesteps=t)
-                geometry_pred = diffusion.inference_step(epsilon_pred,
+                geometry_pred = diffusion.inference_step(epsilon_pred[:,:,:6],
                                                          timestep=torch.tensor([i], device=device),
                                                          sample=noisy_batch['geometry'])                
             
             noisy_batch['geometry'] = geometry_pred.prev_sample * batch['padding_mask']
             
+            
     return geometry_pred.pred_original_sample
 
 def refinement_from_model(batch, model, device, diffusion, geometry_scale, diffusion_mode):
     shape = batch['geometry'].shape
+    shape2 = batch['image_features'].shape
     model.eval()
     # generate initial noise
     noise = torch.randn(*shape, dtype=torch.float32, device=device)*geometry_scale.view(1, 1, 6).to(device)* batch['padding_mask']
     t = torch.tensor([199] * shape[0], device=device)
     noisy_batch = {
         'geometry': diffusion.add_noise_Geometry(batch['geometry'], t, noise),
-        "image_features": batch['image_features']
+        "image_features": torch.randn(*shape2, dtype=torch.float32, device=device) #이미지의 가우시안 노이즈 
     }
-    
+
     # sample x_0 = q(x_0|x_t)
     for i in range(200)[::-1]:
         t = torch.tensor([i] * shape[0], device=device)
+        img_feature_noise = torch.randn(batch['image_features'].shape).to(device)
+        noisy_image_features = diffusion.add_noise_Geometry(batch['image_features'], t, img_feature_noise) * batch['padding_mask_img']
+        noisy_batch["image_features"] = noisy_image_features
         with torch.no_grad():
             # denoise for step t.
             if diffusion_mode == "sample":
@@ -84,13 +93,47 @@ def refinement_from_model(batch, model, device, diffusion, geometry_scale, diffu
                                                          sample=noisy_batch['geometry'])
             elif diffusion_mode == "epsilon":
                 epsilon_pred = model(batch, noisy_batch, timesteps=t)
-                geometry_pred = diffusion.inference_step(epsilon_pred,
+                geometry_pred = diffusion.inference_step(epsilon_pred[:,:,:6],
                                                          timestep=torch.tensor([i], device=device),
                                                          sample=noisy_batch['geometry'])                
             
             noisy_batch['geometry'] = geometry_pred.prev_sample * batch['padding_mask']
             
+            
     return geometry_pred.pred_original_sample
+
+# def refinement_from_model(batch, model, device, diffusion, geometry_scale, diffusion_mode):
+#     shape = batch['geometry'].shape
+#     shape2 = batch['image_features'].shape
+#     model.eval()
+#     # generate initial noise
+#     noise = torch.randn(*shape, dtype=torch.float32, device=device)*geometry_scale.view(1, 1, 6).to(device)* batch['padding_mask']
+#     t = torch.tensor([199] * shape[0], device=device)
+#     noisy_batch = {
+#         'geometry': diffusion.add_noise_Geometry(batch['geometry'], t, noise),
+#         "image_features": torch.randn(*shape2, dtype=torch.float32, device=device)*geometry_scale.view(1, 1, 6).to(device)* batch['padding_mask'] #이미지의 가우시안 노이즈 
+#     }
+    
+#     # sample x_0 = q(x_0|x_t)
+#     for i in range(200)[::-1]:
+#         t = torch.tensor([i] * shape[0], device=device)
+#         with torch.no_grad():
+#             # denoise for step t.
+#             if diffusion_mode == "sample":
+#                 x0_pred = model(batch, noisy_batch, timesteps=t)
+#                 geometry_pred = diffusion.inference_step(x0_pred,
+#                                                          timestep=torch.tensor([i], device=device),
+#                                                          sample=noisy_batch['geometry'])
+#             elif diffusion_mode == "epsilon":
+#                 epsilon_pred = model(batch, noisy_batch, timesteps=t)
+#                 geometry_pred = diffusion.inference_step(epsilon_pred,
+#                                                          timestep=torch.tensor([i], device=device),
+#                                                          sample=noisy_batch['geometry'])                
+            
+#             noisy_batch['geometry'] = geometry_pred.prev_sample * batch['padding_mask']
+#             noisy_batch['image_features'] = geometry_pred.prev_sample * batch['image_features']
+            
+#     return geometry_pred.pred_original_sample
 
 class TrainLoopCAL:
     def __init__(self, accelerator: Accelerator, model, diffusion: GeometryDiffusionScheduler, train_data,
@@ -99,11 +142,11 @@ class TrainLoopCAL:
                  save_interval: int, 
                  device: str = 'cpu',
                  resume_from_checkpoint: str = None,
-                 diffusion_mode = "sample", 
+                 diffusion_mode = "epsilon", 
                  scaling_size = 5,
                  z_scaling_size=0.01,
                  mean_0 = True,
-                 loss_weight = [1,0.1,0.1],
+                 loss_weight = [1,1,1,0.3],
                  is_cond = True):
         
         self.train_data = train_data
@@ -377,6 +420,27 @@ class TrainLoopCAL:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     def CAL_train_epsilon(self, epoch):
         self.model.train()
         warnings.filterwarnings("ignore")
@@ -386,7 +450,8 @@ class TrainLoopCAL:
         train_losses = []
         train_losses_bbox =[]
         train_losses_r =[]     
-        train_losses_z =[]        
+        train_losses_z =[]
+        train_losses_img_features=[]        
         train_mean_ious = []
         train_ious = []
         for step, (batch, ids) in enumerate(self.train_dataloader):
@@ -402,6 +467,7 @@ class TrainLoopCAL:
             # Sample noise that we'll add to the boxes
             geometry_scale = torch.tensor([self.scaling_size, self.scaling_size, self.scaling_size, self.scaling_size, 1, self.z_scaling_size]) # scale에 따라 noise 부여
             noise = torch.randn(batch['geometry'].shape).to(device) * geometry_scale.view(1, 1, 6).to(device)  #[batch, 20, 6]
+            img_feature_noise = torch.randn(batch['image_features'].shape).to(device) # [64, max_comp, 512]
             bsz = batch['geometry'].shape[0] #batch_size
             # Sample a random timestep for each layout
             t = torch.randint(
@@ -409,9 +475,10 @@ class TrainLoopCAL:
             ).long()
 
             noisy_geometry = self.diffusion.add_noise_Geometry(batch['geometry'], t, noise)
+            noisy_image_features = self.diffusion.add_noise_Geometry(batch['image_features'], t, img_feature_noise)
             # rewrite box with noised version, original box is still in batch['box_cond']
             noisy_batch = {"geometry": noisy_geometry*batch['padding_mask'],
-                           "image_features": batch['image_features']}
+                           "image_features": noisy_image_features*batch['padding_mask_img']}
             
             uncond_batch = copy.deepcopy(batch)
             if self.is_cond:
@@ -425,20 +492,21 @@ class TrainLoopCAL:
             # Run the model on the noisy layouts
             with self.accelerator.accumulate(self.model):
                 
-                epsilon_predict = self.model(uncond_batch, noisy_batch, t)
-                bbox_loss, r_loss, z_loss = masked_l2_rz(noise, epsilon_predict, batch['padding_mask']) #masked_12를 사용하여 xywh만 loss 계산 가능, masked_l2_r는 r,z, r의 normalize loss를 포함
-                train_loss = bbox_loss*self.loss_weight[0] + r_loss*self.loss_weight[1] + z_loss*self.loss_weight[2]
+                epsilon_predict = self.model(uncond_batch, noisy_batch, t) # -> [64,max_comp, 518] : xy(2) + wh(2) + r(1) + z(1) + image_feature(512)
+                bbox_loss, r_loss, z_loss, img_feature_loss = masked_l2_rz(noise, epsilon_predict, batch['padding_mask'], batch['padding_mask_img'], img_feature_noise) #masked_12를 사용하여 xywh만 loss 계산 가능, masked_l2_r는 r,z, r의 normalize loss를 포함
+                train_loss = bbox_loss*self.loss_weight[0] + r_loss*self.loss_weight[1] + z_loss*self.loss_weight[2] + img_feature_loss*self.loss_weight[3]
                 train_loss = train_loss.mean()
 
                 train_losses.append(train_loss.item())
                 train_losses_bbox.append(bbox_loss.mean()*self.loss_weight[0])
                 train_losses_r.append(r_loss.mean()*self.loss_weight[1])
                 train_losses_z.append(z_loss.mean()*self.loss_weight[2])
+                train_losses_img_features.append(img_feature_loss.mean()*self.loss_weight[3])
 
                 self.accelerator.backward(train_loss)
                 
                 true_geometry = noisy_geometry*batch['padding_mask']
-                pred_geometry = self.diffusion.add_noise_Geometry(batch['geometry'], t, epsilon_predict)*batch['padding_mask'] 
+                pred_geometry = self.diffusion.add_noise_Geometry(batch['geometry'], t, epsilon_predict[:,:,:6])*batch['padding_mask'] 
                 true_box, pred_box = transform(true_geometry, pred_geometry, self.scaling_size, batch['padding_mask'], self.mean_0)
                 batch_mean_iou = get_mean_iou(true_box, pred_box)
                 train_ious.append(get_iou(true_box, pred_box))
@@ -468,7 +536,8 @@ class TrainLoopCAL:
         val_losses = []
         val_losses_bbox =[]
         val_losses_r =[]     
-        val_losses_z =[]        
+        val_losses_z =[]
+        val_losses_img_features=[]        
         val_mean_ious = []
         val_mean_ious_1000=[]
         train_ious_1000 = []
@@ -495,22 +564,36 @@ class TrainLoopCAL:
                 
             for val_step, (val_batch, val_ids) in enumerate(self.val_dataloader):
                 self.sample2dev(val_batch)
+                # print("#######################################################################################3")
+                # print("batch: ", val_batch['geometry'].shape)
+                # print("batch: ", val_batch['image_features'].shape)
+                # print("batch: ", val_batch['padding_mask'].shape)
+                # print("batch: ", val_batch['padding_mask_img'].shape)
+                # print("batch: ", val_batch['cat'].shape)
+                # print("#######################################################################################3")
+
                 val_noise = torch.randn(val_batch['geometry'].shape).to(device) * geometry_scale.view(1, 1, 6).to(device)
+                val_img_feature_noise = torch.randn(val_batch['image_features'].shape).to(device) # [64, max_comp, 512]
+
                 val_t = torch.randint(0, self.diffusion.num_cont_steps, (val_batch['geometry'].shape[0],)).long()
 
                 val_noisy_geometry = self.diffusion.add_noise_Geometry(val_batch['geometry'], val_t, val_noise)
-                val_noisy_batch = {"geometry": val_noisy_geometry,
-                                "image_features": val_batch['image_features']}
+                val_noisy_image_features = self.diffusion.add_noise_Geometry(val_batch['image_features'], val_t, val_img_feature_noise) 
+
+                val_noisy_batch = {"geometry": val_noisy_geometry * val_batch["padding_mask"],
+                                   "image_features": val_noisy_image_features * val_batch["padding_mask_img"]}
                                 
                 val_pred_epsilon = self.model(val_batch, val_noisy_batch, val_t)
                 
-                val_bbox_loss, val_r_loss, val_z_loss = masked_l2_rz(val_noise, val_pred_epsilon, val_batch['padding_mask'])
-                val_loss = val_bbox_loss*self.loss_weight[0] + val_r_loss*self.loss_weight[1] + val_z_loss*self.loss_weight[2]
+                val_bbox_loss, val_r_loss, val_z_loss, val_img_feature_loss = masked_l2_rz(val_noise, val_pred_epsilon, val_batch['padding_mask'], val_batch['padding_mask_img'], val_img_feature_noise)
+                val_loss = val_bbox_loss*self.loss_weight[0] + val_r_loss*self.loss_weight[1] + val_z_loss*self.loss_weight[2] + val_img_feature_loss*self.loss_weight[3]
+                train_loss = train_loss.mean()
                 val_loss = val_loss.mean()
                 val_losses.append(val_loss.item())
                 val_losses_bbox.append(val_bbox_loss.mean()*self.loss_weight[0])
                 val_losses_r.append(val_r_loss.mean()*self.loss_weight[1])
                 val_losses_z.append(val_z_loss.mean()*self.loss_weight[2])
+                val_losses_img_features.append(val_img_feature_loss.mean()*self.loss_weight[3])
                 
                 # true_geometry = noisy_geometry*batch['padding_mask']
                 # pred_geometry = self.diffusion.add_noise_Geometry(batch['geometry'], t, epsilon_predict)*batch['padding_mask'] 
@@ -518,7 +601,7 @@ class TrainLoopCAL:
                 # batch_mean_iou = get_mean_iou(true_box, pred_box)
                
                 true_geometry = val_noisy_geometry*val_batch['padding_mask']
-                val_pred_geometry = self.diffusion.add_noise_Geometry(val_batch['geometry'], val_t, val_pred_epsilon)*val_batch['padding_mask']
+                val_pred_geometry = self.diffusion.add_noise_Geometry(val_batch['geometry'], val_t, val_pred_epsilon[:,:,:6])*val_batch['padding_mask']
                 
                 val_true_box, val_pred_box = transform(true_geometry, val_pred_geometry, self.scaling_size,val_batch['padding_mask'], self.mean_0)
                 
@@ -551,12 +634,14 @@ class TrainLoopCAL:
         avg_bbox_loss = sum(train_losses_bbox)/len(train_losses_bbox)
         avg_r_loss = sum(train_losses_r)/len(train_losses_r)
         avg_z_loss = sum(train_losses_z)/len(train_losses_z)
+        avg_img_feature_loss = sum(train_losses_img_features)/len(train_losses_img_features)
         avg_train_mean_iou = sum(train_mean_ious) / len(train_mean_ious)
         # validation wandb
         avg_val_loss = sum(val_losses) / len(val_losses) 
         avg_val_bbox_loss = sum(val_losses_bbox)/len(val_losses_bbox)
         avg_val_r_loss = sum(val_losses_r)/len(val_losses_r)
-        avg_val_z_loss = sum(val_losses_z)/len(val_losses_z)        
+        avg_val_z_loss = sum(val_losses_z)/len(val_losses_z)
+        avg_val_img_feature_loss = sum(val_losses_img_features)/len(val_losses_img_features)        
         avg_val_mean_iou = sum(val_mean_ious) / len(val_mean_ious)
         
         wandb.log({
@@ -567,10 +652,11 @@ class TrainLoopCAL:
             "train_bbox": avg_bbox_loss,
             "train_rotation":avg_r_loss,
             "train_z":avg_val_z_loss,
+            "train_img_feature":avg_img_feature_loss,
             "val_bbox": avg_val_bbox_loss,
             "val_rotation":avg_val_r_loss,
             "val_z":avg_z_loss,
-            
+            "val_img_feature":avg_val_img_feature_loss,
             "lr": self.lr_scheduler.get_last_lr()[0]
         }, step=epoch)
         
@@ -584,6 +670,7 @@ class TrainLoopCAL:
             wandb.log({"iou_val_1000": avg_val_mean_iou_1000, "iou_train_1000":avg_train_iou_1000, 
                        "iou_val_refine:":avg_val__iou_refine, "iou_train_refine:":avg_train_iou_refine}, step=epoch)
         
+
         LOG.info(f"Epoch {epoch}, Avg Validation Loss: {avg_val_loss}, Avg Mean IoU: {val_mean_iou}")        
         
         

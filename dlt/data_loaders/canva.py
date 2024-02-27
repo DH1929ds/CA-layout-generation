@@ -112,6 +112,10 @@ class CanvaLayout(Dataset):
         padded_geometry = np.pad(geometry, pad_width=((0,self.max_num_element - np.array(geometry).shape[0]), (0, 0)), constant_values=0.)
         return padded_geometry
     
+    def pad_instance_img(self, image_features):
+        padded_image_features = np.pad(image_features, pad_width=((0,self. max_num_element - np.array(image_features).shape[0]), (0, 0)), constant_values=0.)
+        return padded_image_features
+    
     def pad_instance_type(self, cat):
         num_pad_elements = max(0, self.max_num_element - len(cat))
         # 1차원 배열에 대한 패딩, 배열의 끝에만 패딩을 추가
@@ -127,10 +131,16 @@ class CanvaLayout(Dataset):
         cat = self.pad_instance_type(cat).reshape((-1,1))
         padding_mask = self.pad_instance(padding_mask)
         image_features = self.data['image_features'][idx]
+        padding_mask_img = np.ones(np.array(image_features).shape)
+        padding_mask_img = np.squeeze(padding_mask_img, axis=1)
+        # print("####################################################")
+        # print(padding_mask_img.shape)
+        # print("####################################################")
         image_features = np.squeeze(image_features, axis=1)
         image_features = self.pad_instance(image_features)
-        
+        padding_mask_img = self.pad_instance(padding_mask_img)
         ids = self.data['ids'][idx]  # id 정보 로드
+        
         
         cat[cat=='freeform']=1
         cat[cat=='group']=1
@@ -147,6 +157,7 @@ class CanvaLayout(Dataset):
             "geometry": np.array(geometry).astype(np.float32),
             "image_features": np.array(image_features).astype(np.float32),
             "padding_mask": padding_mask.astype(np.int32),
+            "padding_mask_img": padding_mask_img.astype(np.int32),
             "ids": ids,  # id 정보 반환
             "cat": cat.astype(int)
         }

@@ -17,6 +17,7 @@ def custom_collate_fn(batch):
     batch_collated["geometry"] = batch_collated["geometry"][:, :max_non_zero, :]
     batch_collated["image_features"] = batch_collated["image_features"][:, :max_non_zero, :]
     batch_collated["padding_mask"] = batch_collated["padding_mask"][:, :max_non_zero, :]
+    batch_collated["padding_mask_img"] = batch_collated["padding_mask_img"][:, :max_non_zero, :]
     batch_collated["cat"] = batch_collated["cat"][:, :max_non_zero]
     
     return batch_collated, ids
@@ -65,6 +66,7 @@ def masked_l2(a, b, mask):
     
     a = a[:, :, :4]
     b = b[:, :, :4]
+
     mask = mask[:, :, :4]
     # print("###############################################################")
     # print("a.shape: ", a.shape)
@@ -78,7 +80,7 @@ def masked_l2(a, b, mask):
     mse_loss_val = (non_zero_elements > 0) * (loss / (non_zero_elements + 0.00000001))
     return mse_loss_val
 
-def masked_l2_rz(a, b, mask):
+def masked_l2_rz(a, b, mask, mask_img, d):
     # 첫 4개 요소에 대한 MSE 손실 계산
     mse_loss_bbox = F.mse_loss(a[:, :, :4], b[:, :, :4], reduction='none') * mask[:, :, :4].float()
     mse_loss_bbox = sum_flat(mse_loss_bbox) / (sum_flat(mask[:, :, :4]) + 1e-8)
@@ -98,7 +100,10 @@ def masked_l2_rz(a, b, mask):
     mse_loss_r = F.mse_loss(a[:, :, 4].unsqueeze(-1), b[:, :, 4].unsqueeze(-1), reduction='none') * mask[:, :, 4].unsqueeze(-1).float()
     mse_loss_r = sum_flat(mse_loss_r) / (sum_flat(mask[:, :, 4].unsqueeze(-1)) + 1e-8)
     
-    return mse_loss_bbox, mse_loss_r, mse_loss_z
+    mse_loss_img_features = F.mse_loss(d, b[:, :, 6:], reduction='none') * mask_img.float()
+    mse_loss_img_features = sum_flat(mse_loss_img_features) / (sum_flat(mask_img) + 1e-8)
+    
+    return mse_loss_bbox, mse_loss_r, mse_loss_z, mse_loss_img_features
 
 def masked_l2_r(a, b, mask):
     # 첫 4개 요소에 대한 MSE 손실 계산

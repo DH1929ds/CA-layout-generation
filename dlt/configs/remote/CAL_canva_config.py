@@ -32,7 +32,7 @@ def get_config():
     
     # model mode
     config.rz_ox = True
-    config.loss_weight = [1,1,0.1]
+    config.loss_weight = [1,1,0.1,0.1]
     
     # model specific
     config.latent_dim = 512
