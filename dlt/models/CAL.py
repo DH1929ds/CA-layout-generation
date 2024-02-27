@@ -42,11 +42,11 @@ class CAL_6(ModelMixin, ConfigMixin):
         self.cat_emb = nn.Parameter(torch.randn(5, 64))
         
         self.xy_emb = nn.Sequential(
-            nn.Linear(2, 112)
+            nn.Linear(2, 128)
         )
         
         self.wh_emb = nn.Sequential(
-            nn.Linear(2, 112)
+            nn.Linear(2, 128)
         )
          
         self.ratio_emb = nn.Sequential(
@@ -54,15 +54,15 @@ class CAL_6(ModelMixin, ConfigMixin):
         )
         
         self.tokens_emb = nn.Sequential(
-            nn.Linear(448,512)
+            nn.Linear(320,512)
         )
         
         self.r_emb = nn.Sequential(
-            nn.Linear(1, 64)
+            nn.Linear(1, 128)
         )
         
         self.z_emb = nn.Sequential(
-            nn.Linear(1, 32)
+            nn.Linear(1, 64)
         )
 
     def forward(self, sample, noisy_sample, timesteps):
@@ -83,16 +83,16 @@ class CAL_6(ModelMixin, ConfigMixin):
         # r_concatenated = torch.cat([r_cos.unsqueeze(-1), r_sin.unsqueeze(-1), r_cos_.unsqueeze(-1), r_sin_.unsqueeze(-1)], dim=-1)
 
         # Concatenated vector를 embedding 층에 전달
-        r = sample["geometry"][:, :,4].unsqueeze(-1)
+        r = noisy_sample["geometry"][:, :,4].unsqueeze(-1)
         r_emb = self.r_emb(r)
         
         z = noisy_sample["geometry"][:, :, 5].unsqueeze(-1)
         z_emb = self.z_emb(z)
         
-        ratio =  sample["geometry"][:, :, 2].unsqueeze(2)/ (sample["geometry"][:, :, 3].unsqueeze(2) + 1e-9)
-        log_ratio = torch.log(ratio + 1e-9)
-        log_ratio_clipped = torch.clamp(log_ratio, min=-2, max=2)/2
-        ratio_emb = self.ratio_emb(log_ratio_clipped)
+        # ratio =  sample["geometry"][:, :, 2].unsqueeze(2)/ (sample["geometry"][:, :, 3].unsqueeze(2) + 1e-9)
+        # log_ratio = torch.log(ratio + 1e-9)
+        # log_ratio_clipped = torch.clamp(log_ratio, min=-2, max=2)/2
+        # ratio_emb = self.ratio_emb(log_ratio_clipped)
         
         cat_input = sample["cat"]
         cat_input_flat = rearrange(cat_input, 'b c -> (b c)') #[64,20] -> [1280]
@@ -113,10 +113,10 @@ class CAL_6(ModelMixin, ConfigMixin):
         # print("#############################################################################")
         # print("padding_mask: ", key_padding_mask, key_padding_mask.shape)
         # print("#############################################################################")
-
-        tokens_emb = torch.cat([image_emb, xy_emb, wh_emb, elem_cat_emb, ratio_emb, r_emb, z_emb], dim=-1) #concat
+        tokens_emb = torch.cat([xy_emb, wh_emb, r_emb, z_emb, elem_cat_emb], dim=-1)
+        # tokens_emb = torch.cat([image_emb, xy_emb, wh_emb, elem_cat_emb, ratio_emb, r_emb, z_emb], dim=-1) #concat
         #tokens_emb = torch.cat([image_emb, xy_emb, wh_emb, ratio_emb], dim=-1) #concat
-        tokens_emb = self.tokens_emb(tokens_emb)
+        # tokens_emb = self.tokens_emb(tokens_emb)
    
         tokens_emb = rearrange(tokens_emb, 'b c d -> c b d') #for transformer
         

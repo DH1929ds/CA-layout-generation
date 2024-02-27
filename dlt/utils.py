@@ -10,7 +10,17 @@ def custom_collate_fn(batch):
     batch_data = [{k: v for k, v in item.items() if k != 'ids'} for item in batch]
     ids = [item['ids'] for item in batch]  # 'ids' 수집
     batch_collated = torch.utils.data.dataloader.default_collate(batch_data)
+    non_zero_counts = torch.count_nonzero(batch_collated["image_features"], dim=1)
+    max_non_zero = non_zero_counts.max()
+    
+    
+    batch_collated["geometry"] = batch_collated["geometry"][:, :max_non_zero, :]
+    batch_collated["image_features"] = batch_collated["image_features"][:, :max_non_zero, :]
+    batch_collated["padding_mask"] = batch_collated["padding_mask"][:, :max_non_zero, :]
+    batch_collated["cat"] = batch_collated["cat"][:, :max_non_zero]
+    
     return batch_collated, ids
+
 
 def HSVToRGB(h, s, v):
     (r, g, b) = colorsys.hsv_to_rgb(h, s, v)

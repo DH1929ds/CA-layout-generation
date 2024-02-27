@@ -62,14 +62,14 @@ def create_collage(batch, ids, geometries, canvas_size, base_path, scaling_size,
             print("height:",h)
             print(file_name)
             h = 1
-        if w>2500:
+        if w>4000:
             print("width:",w)
             print(file_name)
-            w = 2500
-        if h>1500:
+            w = 4000
+        if h>2000:
             print("height:",h)
             print(file_name)
-            h = 1500
+            h = 2000
                 
         
         img = img.resize((int(w), int(h))).rotate(r, expand=True)

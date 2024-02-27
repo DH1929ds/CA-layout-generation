@@ -18,7 +18,7 @@ def get_config():
     config.resume_from_checkpoint = None
 
     config.dataset = "canva"
-    config.max_num_comp = 20
+    config.max_num_comp = 40
 
     # Training info
     config.seed = 42
@@ -32,7 +32,7 @@ def get_config():
     
     # model mode
     config.rz_ox = True
-    config.loss_weight = [1,0,0.1]
+    config.loss_weight = [1,1,0.1]
     
     # model specific
     config.latent_dim = 512
