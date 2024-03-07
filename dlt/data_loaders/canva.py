@@ -6,13 +6,13 @@ from torch.utils.data import Dataset
 from functools import partial
 
 class CanvaLayout(Dataset):
-    def __init__(self, json_path, clip_json_path, max_num_com: int = 20, scaling_size=5, z_scaling_size=0.01, mean_0 = True):
-        #self.presentation_size = presentation_size
+    def __init__(self, json_path, clip_json_path, text_json_path, max_num_com: int = 40, scaling_size=1, z_scaling_size=1, mean_0 = True):
+        # self.presentation_size = presentation_size
         self.max_num_element = max_num_com
         self.scaling_size = scaling_size 
         self.z_scaling_size = z_scaling_size
         self.mean_0 = mean_0
-        self.data = self.process(json_path,clip_json_path)
+        self.data = self.process(json_path, clip_json_path, text_json_path)
     
     def normalize_geometry(self, slide, content, num_elements):
         # Normalize left, top, width, height
@@ -29,15 +29,15 @@ class CanvaLayout(Dataset):
         y_scale = 1080.0 / self.scaling_size
         w_scale = 1920.0 / self.scaling_size
         h_scale = 1080.0 / self.scaling_size
-        z_scale = 20.0/ self.z_scaling_size # max 요소 20개
+        z_scale = self.max_num_element / self.z_scaling_size  # max num으로 나눔
         
         if self.mean_0 == True:
             x = xc / x_scale *2 -self.scaling_size
             y = yc / y_scale *2 -self.scaling_size
             w = content['img_width'] / w_scale *2 - self.scaling_size
             h = content['img_height'] / h_scale*2 - self.scaling_size
-            w = content['img_width'] / w_scale*2 - self.scaling_size
-            h = content['img_height'] / h_scale*2 - self.scaling_size
+            # w = content['img_width'] / w_scale*2 - self.scaling_size
+            # h = content['img_height'] / h_scale*2 - self.scaling_size
         else:
             x = xc / x_scale
             y = yc / y_scale            
@@ -50,19 +50,30 @@ class CanvaLayout(Dataset):
         z = content['z_index'] / z_scale # max num comp로 하든말든
         return [x, y, w, h, r, z]
 
-    def process(self, json_path, clip_json_path):
-        with open(json_path, 'r') as f:
+    def process(self, json_path, clip_json_path, text_json_path):
+        with open(json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        with open(clip_json_path, 'r') as f:
+        with open(clip_json_path, 'r', encoding='utf-8') as f:
             clip_data = json.load(f)
+        
+        with open(text_json_path, 'r', encoding='utf-8') as f:
+            text_data = json.load(f)
 
-        processed_data = {"geometry": [], "image_features": [], "ids": [], "type": []} 
+        processed_data = {
+                          "geometry": [], 
+                          "image_features": [], 
+                          "text_features": [], 
+                          "ids": [], 
+                          "type": [],
+                        }
+        
         for presentation in data['presentations']:
             for slide in presentation['slides']:
                 
                 slide_geometry = []
                 slide_image_features = []
+                slide_text_features = []
                 slide_ids = []  # 슬라이드별 id 저장을 위한 리스트
                 slide_type = []
                 num_elements = len(slide['contents'])  # Number of elements in the current slide
@@ -78,24 +89,28 @@ class CanvaLayout(Dataset):
                     image_file_name = content.get('image_file_name', '')
                     ppt_name = presentation['ppt_name']
                     image_features = clip_data.get(ppt_name, {}).get(image_file_name, [])
+                    text_features = text_data.get(ppt_name, {}).get(image_file_name, [])
                     content_id = f"{ppt_name}/{image_file_name}"
                     content_type = content.get('type', '')
                     
                     # 각 요소를 튜플로 묶어서 추가
-                    elements.append((geometry, image_features, content_id, content_type))
+                    elements.append((geometry, image_features, text_features, content_id, content_type))
                 
                 # elements 리스트를 무작위로 섞음
                 random.shuffle(elements)
                 
                 # 섞인 요소들을 다시 각각의 리스트에 추가
-                for geometry, image_features, content_id, content_type in elements:
+                for geometry, image_features, text_features, content_id, content_type in elements:
+                
                     slide_geometry.append(geometry)
                     slide_image_features.append(image_features)
+                    slide_text_features.append(text_features)
                     slide_ids.append(content_id)
                     slide_type.append(content_type)
                     
                 processed_data["geometry"].append(slide_geometry)
                 processed_data["image_features"].append(slide_image_features)
+                processed_data["text_features"].append(slide_text_features)
                 processed_data["ids"].append(slide_ids)  # 슬라이드별 id 정보 추가
                 processed_data["type"].append(slide_type)
         return processed_data
@@ -116,6 +131,10 @@ class CanvaLayout(Dataset):
         padded_image_features = np.pad(image_features, pad_width=((0,self. max_num_element - np.array(image_features).shape[0]), (0, 0)), constant_values=0.)
         return padded_image_features
     
+    def pad_instance_text(self, text_features):
+        padded_text_features = np.pad(text_features, pad_width=((0,self. max_num_element - np.array(text_features).shape[0]), (0, 0)), constant_values=0.)
+        return padded_text_features
+    
     def pad_instance_type(self, cat):
         num_pad_elements = max(0, self.max_num_element - len(cat))
         # 1차원 배열에 대한 패딩, 배열의 끝에만 패딩을 추가
@@ -131,22 +150,33 @@ class CanvaLayout(Dataset):
         cat = self.pad_instance_type(cat).reshape((-1,1))
         padding_mask = self.pad_instance(padding_mask)
         image_features = self.data['image_features'][idx]
+        text_features = self.data['text_features'][idx]
+        
         padding_mask_img = np.ones(np.array(image_features).shape)
         padding_mask_img = np.squeeze(padding_mask_img, axis=1)
+        
+        padding_mask_text = np.ones(np.array(text_features).shape)
+        padding_mask_text = np.squeeze(padding_mask_text, axis=1)
         # print("####################################################")
         # print(padding_mask_img.shape)
         # print("####################################################")
         image_features = np.squeeze(image_features, axis=1)
         image_features = self.pad_instance(image_features)
+        
+        text_features = np.squeeze(text_features, axis=1)
+        text_features = self.pad_instance(text_features)
+    
         padding_mask_img = self.pad_instance(padding_mask_img)
+        padding_mask_text = self.pad_instance(padding_mask_text)
+            
         ids = self.data['ids'][idx]  # id 정보 로드
         
         
         cat[cat=='freeform']=1
         cat[cat=='group']=1
+        cat[cat=='media']=1
         cat[cat=='picture']=2
         cat[cat=='table']=2
-        cat[cat=='media']=2
         cat[cat=='auto_shape']=3
         cat[cat=='text_box']=4
         cat[cat=='0'] = 0
@@ -156,10 +186,13 @@ class CanvaLayout(Dataset):
         return {
             "geometry": np.array(geometry).astype(np.float32),
             "image_features": np.array(image_features).astype(np.float32),
+            "text_features": np.array(text_features).astype(np.float32),
             "padding_mask": padding_mask.astype(np.int32),
             "padding_mask_img": padding_mask_img.astype(np.int32),
+            "padding_mask_text": padding_mask_text.astype(np.int32),
             "ids": ids,  # id 정보 반환
             "cat": cat.astype(int)
+            # "image_cluster_ids": image_cluster_ids
         }
 
     def __getitem__(self, idx):

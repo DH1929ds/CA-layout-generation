@@ -2,12 +2,10 @@ from PIL import Image
 import os
 
 def create_collage(batch, ids, geometries, canvas_size, base_path, scaling_size, mean_0):
-    
     ppt_name = ids[0].split('/')[0]
     slide_name = ids[0].split('/')[1]
     slide_name = slide_name.split('_Shape')[0] + '_backgorund.png'
 
-    
     background_path = os.path.join(base_path, ppt_name, slide_name)
     
     # 배경 이미지 로드
@@ -23,54 +21,59 @@ def create_collage(batch, ids, geometries, canvas_size, base_path, scaling_size,
     # 배경 이미지가 RGBA 모드가 아닌 경우 변환
     if background.mode != 'RGBA':
         background = background.convert('RGBA')
-        print('The background image is not RGBA')
+        # print('The background image is not RGBA')
     
     # 캔버스를 배경 이미지로 초기화
     collage = background
 
-    for i, (file_name, geometry) in enumerate(zip(ids, geometries)):
+    # z 값에 따라 ids와 geometries 정렬
+    zipped_lists = zip(ids, geometries)
+    sorted_pairs = sorted(zipped_lists, key=lambda x: x[1][5])
+
+    sorted_ids, sorted_geometries = zip(*sorted_pairs)
+
+    for i, (file_name, geometry) in enumerate(zip(sorted_ids, sorted_geometries)):
         image_path = os.path.join(base_path, file_name)
         img = Image.open(image_path)
-        
+
         x_scale = 1920.0 / scaling_size
         y_scale = 1080.0 / scaling_size
         w_scale = 1920.0 / scaling_size
         h_scale = 1080.0 / scaling_size
 
         # Geometry 정보 추출 및 처리
-        
-        x, y, w, h, r, z= geometry
-        if mean_0 ==True:
-            x = (x+ scaling_size)/2
-            y = (y+ scaling_size)/2
-            w = (w+ scaling_size)/2
-            h = (h+ scaling_size)/2
+        x, y, w, h, r, z = geometry
+        if mean_0 == True:
+            x = (x + scaling_size) / 2
+            y = (y + scaling_size) / 2
+            w = (w + scaling_size) / 2
+            h = (h + scaling_size) / 2
             
         x = x * x_scale
         y = y * y_scale
         w = w * w_scale
         h = h * h_scale
         r = r * 360.0
-        z = batch[i][5] * len(ids)
-       
 
-        if w < 1 :
-            print("width:",w)
+        if w < 1:
+            print("width:", w)
             print(file_name)
             w = 1
-        if h < 1 :
-            print("height:",h)
+        if h < 1:
+            print("height:", h)
             print(file_name)
             h = 1
-        if w>4000:
-            print("width:",w)
+        if w > 4000:
+            print("width:", w)
             print(file_name)
             w = 4000
-        if h>2000:
-            print("height:",h)
+        if h > 2000:
+            print("height:", h)
             print(file_name)
             h = 2000
-                
+        if r > 360 or r < -1:
+            print("rotation: ", r)
+            print(file_name)
         
         img = img.resize((int(w), int(h))).rotate(r, expand=True)
 

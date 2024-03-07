@@ -1,24 +1,33 @@
 import colorsys
 import random
+import argparse
 
 import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-def custom_collate_fn(batch):
+def collate_wrapper(attention_mask):
+    def collate_fn(batch):
+        return custom_collate_fn(batch, attention_mask)
+    return collate_fn
+
+def custom_collate_fn(batch, attention_mask):
     batch_data = [{k: v for k, v in item.items() if k != 'ids'} for item in batch]
     ids = [item['ids'] for item in batch]  # 'ids' 수집
     batch_collated = torch.utils.data.dataloader.default_collate(batch_data)
-    non_zero_counts = torch.count_nonzero(batch_collated["image_features"], dim=1)
-    max_non_zero = non_zero_counts.max()
     
-    
-    batch_collated["geometry"] = batch_collated["geometry"][:, :max_non_zero, :]
-    batch_collated["image_features"] = batch_collated["image_features"][:, :max_non_zero, :]
-    batch_collated["padding_mask"] = batch_collated["padding_mask"][:, :max_non_zero, :]
-    batch_collated["padding_mask_img"] = batch_collated["padding_mask_img"][:, :max_non_zero, :]
-    batch_collated["cat"] = batch_collated["cat"][:, :max_non_zero]
+    if attention_mask:
+        non_zero_counts = torch.count_nonzero(batch_collated["image_features"], dim=1)
+        max_non_zero = non_zero_counts.max()
+        
+        batch_collated["geometry"] = batch_collated["geometry"][:, :max_non_zero, :]
+        batch_collated["image_features"] = batch_collated["image_features"][:, :max_non_zero, :]
+        batch_collated["text_features"] = batch_collated["text_features"][:, :max_non_zero, :]
+        batch_collated["padding_mask"] = batch_collated["padding_mask"][:, :max_non_zero, :]
+        batch_collated["padding_mask_img"] = batch_collated["padding_mask_img"][:, :max_non_zero, :]
+        batch_collated["padding_mask_text"] = batch_collated["padding_mask_text"][:, :max_non_zero, :]
+        batch_collated["cat"] = batch_collated["cat"][:, :max_non_zero]
     
     return batch_collated, ids
 
@@ -66,7 +75,6 @@ def masked_l2(a, b, mask):
     
     a = a[:, :, :4]
     b = b[:, :, :4]
-
     mask = mask[:, :, :4]
     # print("###############################################################")
     # print("a.shape: ", a.shape)
@@ -80,7 +88,7 @@ def masked_l2(a, b, mask):
     mse_loss_val = (non_zero_elements > 0) * (loss / (non_zero_elements + 0.00000001))
     return mse_loss_val
 
-def masked_l2_rz(a, b, mask, mask_img, d):
+def masked_l2_rz(a, b, mask, mask_img, d, image_predict_ox, device):
     # 첫 4개 요소에 대한 MSE 손실 계산
     mse_loss_bbox = F.mse_loss(a[:, :, :4], b[:, :, :4], reduction='none') * mask[:, :, :4].float()
     mse_loss_bbox = sum_flat(mse_loss_bbox) / (sum_flat(mask[:, :, :4]) + 1e-8)
@@ -99,11 +107,32 @@ def masked_l2_rz(a, b, mask, mask_img, d):
     # mse_loss_r = (sum_flat(mse_loss_cos) + sum_flat(mse_loss_sin)) / (sum_flat(mask[:, :, 4].unsqueeze(-1)) + 1e-8)
     mse_loss_r = F.mse_loss(a[:, :, 4].unsqueeze(-1), b[:, :, 4].unsqueeze(-1), reduction='none') * mask[:, :, 4].unsqueeze(-1).float()
     mse_loss_r = sum_flat(mse_loss_r) / (sum_flat(mask[:, :, 4].unsqueeze(-1)) + 1e-8)
-    
-    mse_loss_img_features = F.mse_loss(d, b[:, :, 6:], reduction='none') * mask_img.float()
-    mse_loss_img_features = sum_flat(mse_loss_img_features) / (sum_flat(mask_img) + 1e-8)
-    
+
+    if image_predict_ox:
+        mse_loss_img_features = F.mse_loss(d, b[:, :, 6:], reduction='none') * mask_img.float()
+        mse_loss_img_features = sum_flat(mse_loss_img_features) / (sum_flat(mask_img) + 1e-8)
+    else:
+        mse_loss_img_features = torch.zeros(size=mse_loss_bbox.shape).to(device)
+        
     return mse_loss_bbox, mse_loss_r, mse_loss_z, mse_loss_img_features
+
+def compute_R_error(a, b, mask):
+    R_a = a[:, :, 4]
+    R_b = b[:, :, 4]
+    R_diff = torch.abs(R_a - R_b) * 360 % 180
+    # mask 내에서 각 위치(열)에 대해 모든 값이 0인지를 확인
+    mask_valid = mask.all(dim=2)  # 모든 값이 0이면 False, 아니면 True 반환
+    
+    # R_diff에서 mask_valid를 적용하여 조건을 만족하는 위치만 고려
+    # mask를 R_diff와 동일한 차원으로 만들기 위해 차원 추가
+    R_diff_masked = R_diff.where(mask_valid, torch.tensor(float('nan')))  # 유효하지 않은 위치는 NaN으로 설정
+    # NaN 값을 제외하고 평균 계산
+    # 각 열에서 NaN을 제외하고 평균 계산
+    column_means = torch.nanmean(R_diff_masked, dim=0)
+
+    # 계산된 평균 값들에 대해 다시 평균을 계산하여 전체 평균을 얻음
+    R_error = torch.mean(column_means[~torch.isnan(column_means)])
+    return R_error
 
 def masked_l2_r(a, b, mask):
     # 첫 4개 요소에 대한 MSE 손실 계산
@@ -184,5 +213,15 @@ def draw_layout_opacity(box, classes, z_indexes, color_mapping_dict, width=360, 
         canvas = cv2.rectangle(canvas, (xs, ys), (xe, ye), color=color_mapping_dict[c], thickness=2)
     canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
     return canvas
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 

@@ -141,3 +141,31 @@ def compute_maximum_iou(
         return 0.0
     else:
         return scores.mean().item()
+    
+def preprocess_layouts(layouts, types):
+    processed_layouts = []
+    for layout, type_ in zip(layouts, types):
+        # PyTorch 텐서를 CPU로 이동시키고 NumPy 배열로 변환합니다.
+        layout_cpu = layout.cpu().numpy() if layout.is_cuda else layout.numpy()
+        type_cpu = type_.cpu().numpy() if type_.is_cuda else type_.numpy()
+        
+        # type이 0이 아닌 요소의 인덱스를 찾습니다.
+        valid_indices = np.where(type_cpu != 0)[0]
+        # type이 0이 아닌 요소에 해당하는 valid의 요소만을 선택합니다.
+        valid_layout = layout_cpu[valid_indices]
+        valid_type = type_cpu[valid_indices]
+        processed_layouts.append((valid_layout, valid_type))
+    return processed_layouts
+    
+def maximum_iou_one_by_one(layout_set_1, layout_set_2, types):
+    
+    layout_set_1 = preprocess_layouts(layout_set_1, types)
+    layout_set_2 = preprocess_layouts(layout_set_2, types)
+    
+    total_iou = 0.0
+    for layout_1, layout_2 in zip(layout_set_1, layout_set_2):
+        max_iou = __compute_maximum_iou_for_layout(layout_1, layout_2)
+        total_iou += max_iou
+
+    average_iou = total_iou / len(layout_set_1)
+    return average_iou
