@@ -152,7 +152,6 @@ class TrainLoopCAL:
         train_R_errors = []
         for step, (batch, ids) in enumerate(self.train_dataloader):
             self.epoch_step = 0
-            print("comp_num:", batch['geometry'].shape[1])
 
             # Skip steps until we reach the resumed step
             if self.resume_from_checkpoint and epoch == self.first_epoch and step < self.resume_step:
