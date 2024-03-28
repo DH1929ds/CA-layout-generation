@@ -27,7 +27,7 @@ from safetensors.torch import load_model, save_model
 from models.CAL import CAL_6, CAL_518
 from accelerate import Accelerator
 
-from evaluation.iou import transform, print_results, get_iou, get_mean_iou, get_iou_slide
+from evaluation.iou import transform, print_results, get_iou, get_mean_iou, get_iou_slide, get_mean_iou_rotated
 from trainers.cal_trainer_func import sample_from_model
 
 from main import init_job
@@ -88,8 +88,10 @@ def main(*args, **kwargs):
     pred_data = []
     iou_data  = []
     ious = []
-    R_erros =[]
+    R_errors =[]
     max_ious = []
+    mean_ious = []
+    mean_ious_rotated = []
     
     geometry_scale = torch.tensor([config.scaling_size, config.scaling_size, config.scaling_size, config.scaling_size, 1, config.z_scaling_size]) # scale에 따라 noise 부여
     
@@ -111,22 +113,30 @@ def main(*args, **kwargs):
         # for id, geometry  in zip(ids, batch["geometry"]):
         for id, geometry, true_geometry  in zip(ids, pred_geometry, real_geometry):
             ious.append(get_iou_slide(geometry, true_geometry))
-            collage = create_collage(true_geometry, id, geometry, canvas_size, base_path, config.scaling_size, config.mean_0)
-            # collage.show()
-            # 역 슬래시를 언더스코어로 변경
-            ppt_name = id[0].split('/')[0]
-            slide_name = id[0].split('/')[1]
+            if config.visualize:
+                collage = create_collage(true_geometry, id, geometry, canvas_size, base_path, config.scaling_size, config.mean_0)
+                # collage.show()
+                # 역 슬래시를 언더스코어로 변경
+                ppt_name = id[0].split('/')[0]
+                slide_name = id[0].split('/')[1]
 
-            # '_Shape' 이전까지의 문자열을 얻기 위해 '_Shape'을 기준으로 분리하고 첫 번째 부분을 선택
-            slide_name = slide_name.split('_Shape')[0]
+                # '_Shape' 이전까지의 문자열을 얻기 위해 '_Shape'을 기준으로 분리하고 첫 번째 부분을 선택
+                slide_name = slide_name.split('_Shape')[0]
 
-            # 확장자를 다시 추가 (.png는 예시입니다. 실제 확장자에 따라 변경해야 할 수 있습니다.)
-            save_file_name = slide_name + '.png'
-            save_file_name = os.path.join(save_path, ppt_name, save_file_name)
-            os.makedirs(os.path.dirname(save_file_name), exist_ok=True)
-            collage.save(save_file_name)
+                # 확장자를 다시 추가 (.png는 예시입니다. 실제 확장자에 따라 변경해야 할 수 있습니다.)
+                save_file_name = slide_name + '.png'
+                save_file_name = os.path.join(save_path, ppt_name, save_file_name)
+                os.makedirs(os.path.dirname(save_file_name), exist_ok=True)
+                collage.save(save_file_name)
             
         R_error = compute_R_error(pred_geometry, batch["geometry"],batch["padding_mask"])
+        
+        real_geometry = batch["geometry"]
+        mean_iou = get_mean_iou(real_geometry, pred_geometry, batch["padding_mask"])
+        mean_ious.append(mean_iou)
+        
+        mean_iou_rotated = get_mean_iou_rotated(real_geometry, pred_geometry, batch["padding_mask"])
+        mean_ious_rotated.append(mean_iou_rotated)
         
         pred_geometry = pred_geometry[:,:,:4]
         real_geometry = batch["geometry"][:,:,:4]
@@ -134,7 +144,7 @@ def main(*args, **kwargs):
         
 
         max_iou = maximum_iou_one_by_one(pred_geometry, real_geometry, types)
-        R_erros.append(R_error)
+        R_errors.append(R_error)
         max_ious.append(max_iou)
 
     all_results["ids"] = id_data
@@ -142,6 +152,10 @@ def main(*args, **kwargs):
     all_results["predicted_val"] = pred_data
     all_results["iou"] = iou_data
 
+    R_errors = torch.cat(R_errors, dim=0)
+    mean_ious = torch.cat(mean_ious, dim=0)
+    mean_ious_rotated = torch.cat(mean_ious_rotated, dim=0)
+    
     with open(config.dataset_path / f'inference_canva.pkl', 'wb') as f:
         pickle.dump(all_results, f)
 
@@ -157,10 +171,11 @@ def main(*args, **kwargs):
     plt.close()  # 현재 그림을 닫아 다음 그림에 영향을 주지 않도록 합니다.
 
     print("Histogram saved as 'iou_histogram.png'")
-    print("R_erros_mean: ",sum(R_erros)/len(R_erros))
+    print("R_erros_mean: ",sum(R_errors)/len(R_errors))
     print("max_iou: ", sum(max_ious)/len(max_ious))
     print("iou: ", sum(ious)/len(ious))
-
+    print("mean_iou:", sum(mean_ious)/len(mean_ious))
+    print("mean_iou_rotated:", sum(mean_ious_rotated)/len(mean_ious_rotated))
     wandb.finish()
 
 if __name__ == '__main__':

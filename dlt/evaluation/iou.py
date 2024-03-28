@@ -1,8 +1,10 @@
-## made by 형준
 import torch 
 import torch.nn.functional as F 
+from shapely.geometry import Polygon
+import numpy as np
+import math
 
-def transform(real_geometry, pred_geometry, scaling_size,mask, mean_0):
+def transform(real_geometry, pred_geometry, scaling_size, mask, mean_0):
     real_geometry = real_geometry[:,:,:4]
     pred_geometry = pred_geometry[:,:,:4]
     mask = mask[:,:,:4] 
@@ -78,8 +80,8 @@ def transform(real_geometry, pred_geometry, scaling_size,mask, mean_0):
 ### rotation 고려 안 했을 때의 iou (병렬로 계산)
 def get_iou(true_boxes, pred_boxes):
     # Extract coordinates from boxes
-    x1, y1, w1, h1 = true_boxes[:, 0], true_boxes[:, 1], true_boxes[:, 2], true_boxes[:, 3]
-    x2, y2, w2, h2 = pred_boxes[:, 0], pred_boxes[:, 1], pred_boxes[:, 2], pred_boxes[:, 3]
+    x1, y1, w1, h1 = true_boxes[:, :, 0], true_boxes[:, :, 1], true_boxes[:, :, 2], true_boxes[:, :, 3]
+    x2, y2, w2, h2 = pred_boxes[:, :, 0], pred_boxes[:, :, 1], pred_boxes[:, :, 2], pred_boxes[:, :, 3]
 
     # Calculate coordinates for each bounding box
     x_min = torch.maximum(x1 - w1/2, x2 - w2/2)
@@ -98,7 +100,7 @@ def get_iou(true_boxes, pred_boxes):
     union_area = area_box1 + area_box2 - intersection_area
 
     # Calculating IoU
-    ious = intersection_area / torch.maximum(union_area, torch.tensor(1e-6))
+    ious = intersection_area / torch.maximum(union_area, torch.tensor(1e-8))
 
     return ious
 
@@ -109,20 +111,47 @@ def print_results(true_boxes, pred_boxes):
     print(f"IoUs: {ious}")
     print(f"Mean IoU: {get_mean_iou(true_boxes, pred_boxes)}")
 
-def get_mean_iou(true_boxes, pred_boxes):
+def get_mean_iou(true_boxes, pred_boxes, mask):
     ious = get_iou(true_boxes, pred_boxes)
-    mean_iou = torch.mean(ious).item()
-    return mean_iou
+
+    ele_num = mask.sum(dim=2) !=0
+    ele_num = ele_num.sum(dim=1)
+    mean_ious = ious.sum(dim=1)/ele_num
+
+    return mean_ious
 
 
 ###################### Obtaining iou of the two rotated bounding boxes  ####################
+def get_mean_iou_rotated(true_boxes, pred_boxes, mask):
+    # true_boxes의 장치를 가져옴
+    device = true_boxes.device
+
+    # ele_num 계산
+    ele_num = mask.sum(dim=2) != 0
+    ele_num = ele_num.sum(dim=1).to(device)  # 같은 장치로 이동
+
+    # ious 초기화: 각 요소에 대해 0으로 채워진 텐서 생성, 같은 장치에 생성
+    ious = torch.zeros(true_boxes.shape[0], true_boxes.shape[1], device=device)
+
+    for i in range(true_boxes.shape[0]):
+        for j in range(true_boxes.shape[1]):
+            box1 = true_boxes[i, j, :]
+            box2 = pred_boxes[i, j, :]
+            ious[i, j] = calculate_iou_rotated(box1, box2)  # 해당 함수도 장치에 맞게 구현되어야 함
+
+    # 각 배치에 대해 ious를 합산하고, 유효한 요소 수로 나누어 평균 IoU 계산
+    sum_ious = ious.sum(dim=1)
+    mean_ious = sum_ious / ele_num.float()  # 연산을 위해 float 타입으로 변환할 수 있음
+
+    return mean_ious
+
 
 def calculate_iou_rotated(box1, box2):
     """
     box1, box2: [cx, cy, width, height, angle]
     """
-    cx1, cy1, w1, h1, angle1 = box1
-    cx2, cy2, w2, h2, angle2 = box2
+    cx1, cy1, w1, h1, angle1 = box1[0], box1[1], box1[2], box1[3], box1[4]
+    cx2, cy2, w2, h2, angle2 = box2[0], box2[1], box2[2], box2[3], box2[4]
     
     # Calculate the rotated coordinates of the corners
     corners1 = torch.tensor([[-w1 / 2, -h1 / 2],
@@ -148,89 +177,34 @@ def calculate_iou_rotated(box1, box2):
     intersection_area = polygon_intersection_area(rotated_corners1, rotated_corners2)
 
     # Calculate the union area
-    union_area = polygon_area(corners1) + polygon_area(corners2) - intersection_area
+    union_area = polygon_area(rotated_corners1) + polygon_area(rotated_corners2) - intersection_area
 
     # Calculate IoU
-    iou = intersection_area / union_area
+    iou = intersection_area / max(union_area, 1e-8)
 
-    return iou.item()  # Convert to Python float 
+    return iou  # Convert to Python float 
 
-def polygon_intersection_area(poly1, poly2):
+def polygon_intersection_area(corners1, corners2):
     """
     Calculate the area of intersection between two polygons.
     """
     # Implementation of the Sutherland-Hodgman algorithm to clip polygons
-    intersection_points = []
-
-    for i in range(len(poly1)):
-        next_index = (i + 1) % len(poly1)
-        clip_line = poly1[i], poly1[next_index]
-        intersection_points.extend(clip_line_by_polygon(clip_line, poly2))
-
-    # Calculate the area of the clipped polygon
-    area = polygon_area(intersection_points)
-    return area
-
-def clip_line_by_polygon(clip_line, polygon):
-    """
-    Clip a line segment against a convex polygon.
-    """
-    result = []
-    start, end = clip_line
-
-    for i in range(len(polygon)):
-        next_index = (i + 1) % len(polygon)
-        edge = polygon[i], polygon[next_index]
-
-        if is_inside(start, edge):
-            if is_inside(end, edge):
-                result.append(end)
-            else:
-                intersection_point = line_intersection(start, end, edge[0], edge[1])
-                result.append(intersection_point)
-        elif is_inside(end, edge):
-            intersection_point = line_intersection(start, end, edge[0], edge[1])
-            result.append(intersection_point)
-
-    return result
-
-def is_inside(point, edge):
-    """
-    Check if a point is inside or outside of an edge.
-    """
-    return (edge[1][0] - edge[0][0]) * (point[1] - edge[0][1]) > (edge[1][1] - edge[0][1]) * (point[0] - edge[0][0])
-
-def line_intersection(p1, q1, p2, q2):
-    """
-    Calculate the intersection point of two lines.
-    """
-    x1, y1 = p1
-    x2, y2 = q1
-    x3, y3 = p2
-    x4, y4 = q2
+    corners1_np = corners1.numpy()
+    corners2_np = corners2.numpy()
     
-    determinant = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    poly1 = Polygon(corners1_np)
+    poly2 = Polygon(corners2_np)
     
-    if determinant == 0:
-        return torch.tensor([0.0, 0.0])  # Lines are parallel
-    
-    intersection_x = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / determinant
-    intersection_y = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / determinant
-    
-    return torch.tensor([intersection_x, intersection_y])
+    intersection_area = poly1.intersection(poly2).area
+    return intersection_area
 
-def polygon_area(points):
+def polygon_area(corners):
     """
-    Calculate the area of a polygon using the shoelace formula. (신발끈 공식으로 삼각형 넓이 구하기)
+    Convert torch tensor corners to a numpy array and calculate the polygon area.
     """
-    n = len(points)
-    area = 0.0
-    for i in range(n):
-        j = (i + 1) % n
-        area += points[i][0] * points[j][1]
-        area -= points[j][0] * points[i][1]
-    area = torch.abs(area) / 2.0
-    return area
+    corners_np = corners.numpy()
+    poly = Polygon(corners_np)
+    return poly.area
 
 def calculate_iou(box1, box2):
     # box1, box2: [x, y, w, h]

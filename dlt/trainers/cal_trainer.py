@@ -148,7 +148,6 @@ class TrainLoopCAL:
         train_losses_z =[]    
         train_losses_img_features=[]    
         train_mean_ious = []
-        train_ious = []
         train_R_errors = []
         for step, (batch, ids) in enumerate(self.train_dataloader):
             self.epoch_step = 0
@@ -172,7 +171,7 @@ class TrainLoopCAL:
                 t = self.sample_timesteps(self.diffusion.num_cont_steps, bsz, 500, device=device).long()
             
             noisy_geometry = self.diffusion.add_noise_Geometry(batch['geometry'], t, noise)
-            noisy_image_features = self.diffusion.add_noise_Geometry(batch['image_features'], t, img_feature_noise)
+            noisy_image_features = self.diffusion.add_noise_Geometry(batch['image_features'], torch.full((bsz,), 100, dtype=torch.long, device=device), img_feature_noise)
             # rewrite box with noised version, original box is still in batch['box_cond']
             noisy_batch = {"geometry": noisy_geometry*batch['padding_mask'],
                             "image_features": noisy_image_features*batch['padding_mask_img']}
@@ -215,9 +214,7 @@ class TrainLoopCAL:
                 elif self.diffusion_mode == "sample":
                     true_geometry = batch["geometry"]*batch['padding_mask']
                     pred_geometry = model_predict[:,:,:6]*batch['padding_mask']
-                true_box, pred_box = transform(true_geometry, pred_geometry, self.scaling_size, batch['padding_mask'], self.mean_0)
-                batch_mean_iou = get_mean_iou(true_box, pred_box)
-                train_ious.append(get_iou(true_box, pred_box))
+                batch_mean_iou = get_mean_iou(true_geometry, pred_geometry, batch['padding_mask'])
                 
                 # print(f"batch_mean_iou", batch_mean_iou)
                 train_mean_ious.append(batch_mean_iou)
@@ -249,7 +246,6 @@ class TrainLoopCAL:
         train_ious_1000 = []
         train_ious_refine = []
         val_refine_ious = []
-        val_ious =[]
         val_R_errors =[]
 
         with torch.no_grad():
@@ -258,15 +254,13 @@ class TrainLoopCAL:
                 train_pred_geometry_1000 = train_pred_geometry_1000*batch['padding_mask']
                 
                 true_geometry = batch["geometry"] 
-                train_true_box, train_pred_box = transform(true_geometry, train_pred_geometry_1000, self.scaling_size,batch['padding_mask'], self.mean_0)
-                train_mean_iou = get_mean_iou(train_true_box, train_pred_box)      
+                train_mean_iou = get_mean_iou(true_geometry, train_pred_geometry_1000, batch['padding_mask'])
                 train_ious_1000.append(train_mean_iou)
                 
                 train_pred_geometry_refine = refinement_from_model(batch, self.model, device, self.diffusion, geometry_scale, self.diffusion_mode, self.image_pred_ox)
                 train_pred_geometry_refine = train_pred_geometry_refine*batch['padding_mask']
                 
-                train_true_box, train_pred_box_refine = transform(true_geometry, train_pred_geometry_refine, self.scaling_size, batch['padding_mask'], self.mean_0)
-                train_mean_iou_refine = get_mean_iou(train_true_box, train_pred_box_refine)      
+                train_mean_iou_refine = get_mean_iou(true_geometry, train_pred_geometry_refine, batch['padding_mask'])
                 train_ious_refine.append(train_mean_iou_refine)
 
 
@@ -283,7 +277,7 @@ class TrainLoopCAL:
                     val_t = self.sample_timesteps(self.diffusion.num_cont_steps, bsz, 500, device=device).long()
             
                 val_noisy_geometry = self.diffusion.add_noise_Geometry(val_batch['geometry'], val_t, val_noise) *val_batch['padding_mask'] 
-                val_noisy_image_features = self.diffusion.add_noise_Geometry(val_batch['image_features'], val_t, val_img_feature_noise) *val_batch['padding_mask_img'] 
+                val_noisy_image_features = self.diffusion.add_noise_Geometry(val_batch['image_features'], torch.full((bsz,), 100, dtype=torch.long, device=device), val_img_feature_noise) *val_batch['padding_mask_img'] 
 
                 val_noisy_batch = {"geometry": val_noisy_geometry * val_batch["padding_mask"],
                                 "image_features": val_noisy_image_features * val_batch["padding_mask_img"]}
@@ -312,11 +306,7 @@ class TrainLoopCAL:
                     true_geometry = val_batch["geometry"]*val_batch['padding_mask']
                     val_pred_geometry = val_model_predict[:,:,:6]*val_batch['padding_mask']              
                 
-                val_true_box, val_pred_box = transform(true_geometry, val_pred_geometry, self.scaling_size, val_batch['padding_mask'], self.mean_0)
-                
-                val_mean_iou = get_mean_iou(val_true_box, val_pred_box)
-
-                val_ious.append(get_iou(val_true_box, val_pred_box))
+                val_mean_iou = get_mean_iou(true_geometry, val_pred_geometry, val_batch['padding_mask'])
                 val_mean_ious.append(val_mean_iou)
 
                 val_R_error = compute_R_error(true_geometry, val_pred_geometry, val_batch['padding_mask'])
@@ -328,18 +318,21 @@ class TrainLoopCAL:
                     # Calculate and log mean_iou
                     val_pred_geometry_1000 = val_pred_geometry_1000*val_batch['padding_mask']
                     true_geometry = val_batch["geometry"]
-                    val_true_box, val_pred_box = transform(true_geometry, val_pred_geometry_1000, self.scaling_size,val_batch['padding_mask'], self.mean_0)
-                    val_mean_iou_1000 = get_mean_iou(val_true_box, val_pred_box)      
+                    val_mean_iou_1000 = get_mean_iou(true_geometry, val_pred_geometry_1000, val_batch['padding_mask'])    
                     val_mean_ious_1000.append(val_mean_iou_1000)
                     
                     val_pred_geometry_refine = refinement_from_model(val_batch, self.model, device, self.diffusion, geometry_scale, self.diffusion_mode, self.image_pred_ox)
 
                     val_pred_geometry_refine=val_pred_geometry_refine*val_batch['padding_mask']
-                    val_true_box, val_pred_box_refine = transform(true_geometry, val_pred_geometry_refine, self.scaling_size,val_batch['padding_mask'], self.mean_0)
-                    val_refine_iou = get_mean_iou(val_true_box, val_pred_box_refine)
+                    val_refine_iou = get_mean_iou(true_geometry, val_pred_geometry_refine, val_batch['padding_mask'])
                     val_refine_ious.append(val_refine_iou)
                     
+        train_mean_ious = torch.cat(train_mean_ious, dim=0)
+        val_mean_ious = torch.cat(val_mean_ious, dim=0)
+        train_R_errors = torch.cat(train_R_errors, dim=0)
+        val_R_errors = torch.cat(val_R_errors, dim=0)
 
+        
         ## train wandb
         avg_train_loss = sum(train_losses)/len(train_losses)
         avg_bbox_loss = sum(train_losses_bbox)/len(train_losses_bbox)
@@ -376,16 +369,21 @@ class TrainLoopCAL:
         }, step=epoch)
         
         if epoch % 30 == 0:
+            val_mean_ious_1000 = torch.cat(val_mean_ious_1000, dim=0)    
+            train_ious_1000 = torch.cat(train_ious_1000, dim=0)
+            train_ious_refine = torch.cat(train_ious_refine, dim=0) 
+            val_refine_ious = torch.cat(val_refine_ious, dim=0)     
+            
+               
             avg_val_mean_iou_1000 = sum(val_mean_ious_1000) / len(val_mean_ious_1000)
             avg_train_iou_1000 = sum(train_ious_1000) / len(train_ious_1000)
             avg_train_iou_refine = sum(train_ious_refine) / len(train_ious_refine)
-            
-            
             avg_val__iou_refine = sum(val_refine_ious) / len(val_refine_ious)
+            
             wandb.log({"iou_val_1000": avg_val_mean_iou_1000, "iou_train_1000":avg_train_iou_1000, 
                     "iou_val_refine:":avg_val__iou_refine, "iou_train_refine:":avg_train_iou_refine}, step=epoch)
         
-        LOG.info(f"Epoch {epoch}, Avg Validation Loss: {avg_val_loss}, Avg Mean IoU: {val_mean_iou}")        
+        LOG.info(f"Epoch {epoch}, Avg Validation Loss: {avg_val_loss}, Avg Mean IoU: {avg_val_mean_iou}")        
 
         progress_bar.close()
         self.accelerator.wait_for_everyone()

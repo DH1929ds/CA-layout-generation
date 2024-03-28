@@ -137,6 +137,7 @@ def init_job():
     parser.add_argument("--infer_ckpt", type=int, default=999)
     parser.add_argument("--picture_path", type=str, default="val_picture")
     parser.add_argument("--save_path", type=str, default="output_result2")
+    parser.add_argument("--visualize", type=str2bool, default=True)
     # Parse arguments
     config = parser.parse_args()
 

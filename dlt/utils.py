@@ -121,18 +121,12 @@ def compute_R_error(a, b, mask):
     R_b = b[:, :, 4]
     R_diff = torch.abs(R_a - R_b) * 360 % 180
     # mask 내에서 각 위치(열)에 대해 모든 값이 0인지를 확인
-    mask_valid = mask.all(dim=2)  # 모든 값이 0이면 False, 아니면 True 반환
     
-    # R_diff에서 mask_valid를 적용하여 조건을 만족하는 위치만 고려
-    # mask를 R_diff와 동일한 차원으로 만들기 위해 차원 추가
-    R_diff_masked = R_diff.where(mask_valid, torch.tensor(float('nan')))  # 유효하지 않은 위치는 NaN으로 설정
-    # NaN 값을 제외하고 평균 계산
-    # 각 열에서 NaN을 제외하고 평균 계산
-    column_means = torch.nanmean(R_diff_masked, dim=0)
+    ele_num = mask.sum(dim=2) !=0
+    ele_num = ele_num.sum(dim=1)   
+    R_errors = R_diff.sum(dim=1)/ele_num
 
-    # 계산된 평균 값들에 대해 다시 평균을 계산하여 전체 평균을 얻음
-    R_error = torch.mean(column_means[~torch.isnan(column_means)])
-    return R_error
+    return R_errors
 
 def masked_l2_r(a, b, mask):
     # 첫 4개 요소에 대한 MSE 손실 계산
